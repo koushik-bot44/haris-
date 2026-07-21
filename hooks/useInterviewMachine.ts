@@ -61,6 +61,7 @@ export interface InterviewMachine {
   beginMicCheck: () => void;
   confirmMicCheck: () => void;
   switchToTextMode: () => void;
+  retryVoice: () => void;
   startInterview: () => void;
   endAnswerNow: () => void;
   submitTextAnswer: (text: string) => void;
@@ -166,6 +167,18 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     micCheckSttRef.current = null;
     setPhase("preroll");
   }, []);
+
+  /** The road back: mic problems must never be a one-way door into text mode.
+   * Re-arms voice; from mic-check the user re-runs the check, mid-interview
+   * the current answer restarts listening immediately. */
+  const retryVoice = useCallback(() => {
+    textModeRef.current = false;
+    setTextMode(false);
+    setDegradeReason(null);
+    setMicCheckTranscript("");
+    if (phase === "listening") beginListening();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
 
   const switchToTextMode = useCallback(() => {
     try {
@@ -501,6 +514,7 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     beginMicCheck,
     confirmMicCheck,
     switchToTextMode,
+    retryVoice,
     startInterview,
     endAnswerNow,
     submitTextAnswer,

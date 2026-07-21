@@ -118,6 +118,20 @@ function InterviewRoom() {
 
 type M = ReturnType<typeof useInterviewMachine>;
 
+function micHelp(reason: string | null): string {
+  switch (reason) {
+    case "unsupported":
+      return "This browser doesn't support voice input — open the app in Google Chrome on a laptop for the spoken interview. Text mode works everywhere.";
+    case "not-allowed":
+    case "service-not-allowed":
+      return "The microphone is blocked. In Chrome, click the lock (or camera) icon in the address bar → Microphone → Allow, then try again.";
+    case "network":
+      return "Chrome's speech service needs internet — check the connection, then try the microphone again.";
+    default:
+      return "Microphone unavailable right now. You can retry, or continue in text mode — questions are still spoken aloud and always captioned.";
+  }
+}
+
 function MicCheck({ m }: { m: M }) {
   const started = m.micCheckTranscript.length > 0 || m.hearing;
   return (
@@ -154,14 +168,15 @@ function MicCheck({ m }: { m: M }) {
         </>
       ) : (
         <>
-          <p className="muted">
-            {m.degradeReason === "unsupported"
-              ? "This browser doesn't support voice input — the interview runs in text mode. Questions are still spoken aloud and always captioned."
-              : "Microphone unavailable — continuing in text mode. Questions are still spoken aloud and always captioned."}
-          </p>
-          <button className="btn" onClick={m.confirmMicCheck}>
-            Continue in text mode
-          </button>
+          <p className="muted">{micHelp(m.degradeReason)}</p>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <button className="btn" onClick={m.retryVoice}>
+              Try microphone again
+            </button>
+            <button className="btn secondary" onClick={m.confirmMicCheck}>
+              Continue in text mode
+            </button>
+          </div>
         </>
       )}
     </section>
@@ -252,9 +267,12 @@ function Live({ m, textDraft, setTextDraft }: { m: M; textDraft: string; setText
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitText();
             }}
           />
-          <div>
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
             <button className="btn" onClick={submitText} disabled={!textDraft.trim()}>
               Submit answer
+            </button>
+            <button className="btn secondary" onClick={m.retryVoice}>
+              Try voice again
             </button>
           </div>
         </div>

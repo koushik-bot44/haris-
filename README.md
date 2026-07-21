@@ -15,12 +15,18 @@ npm run dev        # http://localhost:3000 — use Chrome (voice needs its speec
 npm test           # unit tests: STT reducer, metrics, interview flow, API validation
 ```
 
-No API key needed: the LLM is a mock provider (realistic latency, curated HR
-question bank, adaptive follow-ups, simulated failures so every rescue path
-runs). When a Gemini key exists: set `LLM_PROVIDER=gemini` + the key in env —
-`lib/llm/` is the only place that changes.
+No API key needed. Two brains, picked via `LLM_PROVIDER` (see `.env.example`):
 
-`LLM_MOCK_CHAOS=0 npm run dev` disables simulated provider failures (demo mode).
+- **`claude-cli`** (dev default via `.env.local`) — your authenticated Claude
+  Code CLI runs the interviewer on the quickest model (haiku): a real,
+  unscripted HR conversation that reacts to what you actually said. ~3–5s per
+  reply (masked by the verbal ack); local machine only. Any CLI failure falls
+  back to the scripted flow mid-interview — the round never dies.
+- **`mock`** — scripted question bank, realistic latency, simulated failures
+  (`LLM_MOCK_CHAOS=0` disables them). Used in CI and as the rescue path.
+
+When a Gemini key exists: `LLM_PROVIDER=gemini` + the key in env — `lib/llm/`
+is the only place that changes.
 
 ## What works today (M1 weekend 1)
 
