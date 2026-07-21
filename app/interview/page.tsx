@@ -179,6 +179,11 @@ function Preroll({ m }: { m: M }) {
         <strong>Pausing for ~2 seconds ends your answer</strong> — like handing the turn back to the
         interviewer. You can also press <kbd>Enter</kbd> or the “I'm done answering” button.
       </p>
+      <p>
+        This is a real conversation: <strong>you can interrupt Priya any time — just start talking</strong>{" "}
+        and she'll stop and listen. Headphones make this seamless (without them, her own voice through
+        your speakers can confuse the mic).
+      </p>
       <button className="btn" onClick={m.startInterview}>
         Start the interview
       </button>
@@ -205,6 +210,15 @@ function Live({ m, textDraft, setTextDraft }: { m: M; textDraft: string; setText
           <p style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: "1.15rem" }}>{m.caption}</p>
         )}
       </div>
+
+      {m.phase === "speaking" && !m.textMode && (
+        <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+          <span className={`level ${m.hearing ? "active" : ""}`} aria-hidden>
+            <span /><span /><span /><span />
+          </span>
+          <span className="small muted">mic is live — jump in anytime</span>
+        </div>
+      )}
 
       {m.phase === "listening" && !m.textMode && (
         <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>

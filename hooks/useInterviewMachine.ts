@@ -13,6 +13,7 @@ import type {
 import { startStt, type SttSession } from "@/lib/stt";
 import { fullTranscript, type SttState } from "@/lib/stt-reducer";
 import { speak, type SpeakHandle } from "@/lib/tts";
+import { decideBargeIn, echoOverlap, ECHO_OVERLAP_THRESHOLD } from "@/lib/barge-in";
 import { aggregateMetrics, computeDeliveryMetrics, METRICS_VERSION } from "@/lib/metrics";
 import { newSessionId, saveSession } from "@/lib/session-store";
 import { VERBAL_ACKS } from "@/lib/fixtures/hr-questions";
@@ -98,6 +99,14 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
   const textModeRef = useRef(false);
   /** Trace captured when STT degraded mid-answer — merged into the text-mode submit. */
   const pendingTraceRef = useRef<SttTraceEvent[]>([]);
+  /** Live mic session that runs WHILE Priya speaks — barge-in + early-start capture. */
+  const interruptSttRef = useRef<SttSession | null>(null);
+  const ttsTurnStartRef = useRef<number | null>(null);
+  // Fresh-closure helpers assigned every render (see bottom of hook) so memoized
+  // callbacks never capture a stale endAnswer — the exact bug class the
+  // adversarial review confirmed in this file.
+  const watchSilenceRef = useRef<(sess: SttSession) => void>(() => {});
+  const adoptSessionRef = useRef<(sess: SttSession) => void>(() => {});
 
   const clearSilenceTimer = () => {
     if (silenceTimerRef.current) {
@@ -112,6 +121,7 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     try {
       sttRef.current?.stop();
       micCheckSttRef.current?.stop();
+      interruptSttRef.current?.stop();
     } catch {}
     speakRef.current?.cancel();
     ackRef.current?.cancel();
@@ -240,15 +250,7 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     });
     sttRef.current = sess;
     if (!sess) return;
-
-    clearSilenceTimer();
-    silenceTimerRef.current = setInterval(() => {
-      const st = sess.getState();
-      const hasSpeech = st.finalSegments.length > 0 || st.interim.trim().length > 0;
-      if (st.lastSpeechT && hasSpeech && Date.now() - st.lastSpeechT > SILENCE_MS) {
-        endAnswer();
-      }
-    }, 250);
+    watchSilenceRef.current(sess);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [degradeToText]);
 
@@ -317,6 +319,10 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
 
     const handle = speak(turn.text);
     speakRef.current = handle;
+    ttsTurnStartRef.current = null;
+    handle.firstSyllableAt.then((t) => {
+      ttsTurnStartRef.current = t;
+    });
 
     // Latency = student's last word → interviewer's first syllable (plan anchor).
     if (answerEndTRef.current !== null) {
@@ -329,16 +335,80 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
       });
     }
 
+    // Real-time conversation: the mic stays LIVE while Priya speaks. Sustained,
+    // non-echo candidate speech cancels her mid-sentence (barge-in — she stops
+    // and listens like a real interviewer); a quieter early start is captured
+    // and becomes the beginning of the answer instead of being lost.
+    const promo = { promoted: false };
+    if (!textModeRef.current && !turn.done) {
+      const holder: { sess: SttSession | null } = { sess: null };
+      holder.sess = startStt({
+        onUpdate: (s: SttState) => {
+          setHearing(s.lastSpeechT !== null && Date.now() - s.lastSpeechT < 900);
+          if (promo.promoted) {
+            const lastFinal = s.finalSegments[s.finalSegments.length - 1] ?? "";
+            setLastSentence(lastFinal);
+            return;
+          }
+          const heard = fullTranscript(s);
+          const msSince = ttsTurnStartRef.current === null ? 0 : Date.now() - ttsTurnStartRef.current;
+          if (
+            holder.sess &&
+            !endedRef.current &&
+            decideBargeIn({ heardText: heard, spokenText: turn.text, msSinceTtsStart: msSince }) === "interrupt"
+          ) {
+            promo.promoted = true;
+            interruptSttRef.current = null;
+            handle.cancel();
+            adoptSessionRef.current(holder.sess);
+          }
+        },
+        onDegrade: (reason) => {
+          if (!promo.promoted) {
+            // The live-mic listener dying pre-promotion is not fatal — the
+            // normal post-TTS beginListening() will start fresh and degrade
+            // properly if the problem persists.
+            interruptSttRef.current = null;
+            return;
+          }
+          clearSilenceTimer();
+          const captured = sttRef.current?.getState();
+          sttRef.current = null;
+          if (captured) {
+            setDegradePrefill(fullTranscript(captured));
+            pendingTraceRef.current = captured.trace;
+          }
+          degradeToText(reason);
+        },
+      });
+      interruptSttRef.current = holder.sess;
+    }
+
     await handle.done;
     turnsRef.current.push({ speaker: "interviewer", text: turn.text, tStart, tEnd: Date.now() });
     if (endedRef.current) return;
 
     if (turn.done) {
       finishInterview();
+    } else if (promo.promoted) {
+      // Barge-in already adopted the live mic session and moved us to listening.
     } else {
+      const isess = interruptSttRef.current;
+      interruptSttRef.current = null;
+      if (isess) {
+        const heard = fullTranscript(isess.getState());
+        if (heard.trim() && echoOverlap(heard, turn.text) < ECHO_OVERLAP_THRESHOLD) {
+          // Early start: the candidate began answering before Priya finished.
+          adoptSessionRef.current(isess);
+          return;
+        }
+        try {
+          isess.stop(); // echo or noise — discard
+        } catch {}
+      }
       beginListening();
     }
-  }, [beginListening, candidateName, finishInterview, role]);
+  }, [beginListening, candidateName, degradeToText, finishInterview, role]);
 
   const endAnswer = useCallback(async () => {
     clearSilenceTimer();
@@ -375,6 +445,28 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     },
     [callInterviewer, phase, recordAnswer, speakAck],
   );
+
+  // Assigned every render so these closures always see the CURRENT endAnswer —
+  // memoized callbacks call through the ref instead of capturing directly.
+  watchSilenceRef.current = (sess: SttSession) => {
+    clearSilenceTimer();
+    silenceTimerRef.current = setInterval(() => {
+      const st = sess.getState();
+      const hasSpeech = st.finalSegments.length > 0 || st.interim.trim().length > 0;
+      if (st.lastSpeechT && hasSpeech && Date.now() - st.lastSpeechT > SILENCE_MS) {
+        void endAnswer();
+      }
+    }, 250);
+  };
+  adoptSessionRef.current = (sess: SttSession) => {
+    setDegradePrefill("");
+    pendingTraceRef.current = [];
+    setLastSentence("");
+    answerStartTRef.current = Date.now();
+    sttRef.current = sess;
+    setPhase("listening");
+    watchSilenceRef.current(sess);
+  };
 
   const startInterview = useCallback(() => {
     if (startedRef.current) return;
