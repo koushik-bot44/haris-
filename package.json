@@ -10,6 +10,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "kokoro-js": "^1.2.1",
     "next": "^15.3.0",
     "react": "^19.0.0",

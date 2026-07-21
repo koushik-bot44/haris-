@@ -121,19 +121,37 @@ type M = ReturnType<typeof useInterviewMachine>;
 function micHelp(reason: string | null): string {
   switch (reason) {
     case "unsupported":
-      return "This browser doesn't support voice input — open the app in Google Chrome on a laptop for the spoken interview. Text mode works everywhere.";
+      return "This browser has no built-in speech recognition — switching to the on-device engine (a one-time ~40MB download). Voice will work here once it's ready.";
     case "not-allowed":
     case "service-not-allowed":
-      return "The microphone is blocked. In Chrome, click the lock (or camera) icon in the address bar → Microphone → Allow, then try again.";
+      return "The microphone is blocked. Click the lock (or camera) icon in the address bar → Microphone → Allow, then try again.";
     case "network":
-      return "Chrome's speech service needs internet — check the connection, then try the microphone again.";
+      return "Your browser can't reach Google's speech service — Brave, Arc, plain Chromium builds, and some VPNs all block it (your internet is fine). Two fixes: open this page in real Google Chrome, or wait for the on-device speech engine below — a one-time ~40MB download that works in ANY browser, even offline.";
+    case "whisper_loading":
+      return "The on-device speech engine is still downloading (~40MB, one time). Try the microphone again when it says ready — or continue in text mode meanwhile.";
+    case "whisper_failed":
+      return "The on-device speech engine failed to load on this machine. Text mode works everywhere; real Google Chrome enables the online engine.";
     default:
       return "Microphone unavailable right now. You can retry, or continue in text mode — questions are still spoken aloud and always captioned.";
   }
 }
 
+function useWhisperBadge(active: boolean): string {
+  const [status, setStatus] = useState("off");
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(async () => {
+      const { whisperStatus } = await import("@/lib/stt-whisper");
+      setStatus(whisperStatus());
+    }, 800);
+    return () => clearInterval(id);
+  }, [active]);
+  return status;
+}
+
 function MicCheck({ m }: { m: M }) {
   const started = m.micCheckTranscript.length > 0 || m.hearing;
+  const whisper = useWhisperBadge(m.textMode);
   return (
     <section className="card">
       <h2>Quick mic check</h2>
@@ -184,6 +202,14 @@ function MicCheck({ m }: { m: M }) {
               Continue in text mode
             </button>
           </div>
+          {whisper !== "off" && (
+            <p className="small" style={{ marginTop: 10, color: whisper === "ready" ? "var(--ok)" : "var(--muted)" }}>
+              On-device speech engine:{" "}
+              {whisper === "loading" && "downloading… (~40MB, one time)"}
+              {whisper === "ready" && "ready ✓ — hit “Try microphone again”"}
+              {whisper === "failed" && "failed to load on this machine"}
+            </p>
+          )}
           {m.degradeReason && (
             <p className="small muted" style={{ marginTop: 10 }}>
               diagnostic code: <code>{m.degradeReason}</code>

@@ -26,6 +26,9 @@ export interface SttState {
 export type SttAction =
   | { type: "START"; t: number }
   | { type: "RESULT"; t: number; text: string; isFinal: boolean }
+  /** Speech energy detected before any transcript exists (Whisper/VAD path) —
+   * keeps the silence timer and level meter honest while transcription lags. */
+  | { type: "SPEECH_ACTIVITY"; t: number }
   | { type: "ENGINE_END"; t: number } // recognizer stopped on its own
   | { type: "ERROR"; t: number; error: string }
   | { type: "STOP"; t: number }; // we intentionally stopped (answer ended)
@@ -99,6 +102,12 @@ export function sttReduce(state: SttState, action: SttAction): { state: SttState
         s.consecutiveErrors = 0;
         s.consecutiveNetworkErrors = 0;
       }
+      return { state: s, effect: null };
+    }
+
+    case "SPEECH_ACTIVITY": {
+      if (s.phase !== "listening") return { state: s, effect: null };
+      s.lastSpeechT = action.t;
       return { state: s, effect: null };
     }
 

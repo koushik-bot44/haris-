@@ -12,7 +12,8 @@ import type {
   Turn,
 } from "@/lib/types";
 import { composeOverall } from "@/lib/rubric";
-import { startStt, type SttSession } from "@/lib/stt";
+import { getSttEngine, setSttEngine, startStt, type SttSession } from "@/lib/stt";
+import { ensureWhisperLoading } from "@/lib/stt-whisper";
 import { fullTranscript, type SttState } from "@/lib/stt-reducer";
 import { speak, type SpeakHandle } from "@/lib/tts";
 import { decideBargeIn, echoOverlap, ECHO_OVERLAP_THRESHOLD } from "@/lib/barge-in";
@@ -151,6 +152,15 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
   }, [cleanup]);
 
   const degradeToText = useCallback((reason: string) => {
+    // A network/unsupported failure means THIS BROWSER can't reach Google's
+    // speech service (Brave, Arc, plain Chromium, VPNs) — flip to the
+    // on-device Whisper engine and start its one-time download. Text mode
+    // covers the meantime; "Try microphone again" routes via Whisper once
+    // the badge says ready.
+    if ((reason === "network" || reason === "unsupported") && getSttEngine() !== "whisper") {
+      setSttEngine("whisper");
+      ensureWhisperLoading();
+    }
     textModeRef.current = true;
     setTextMode(true);
     setDegradeReason(reason);

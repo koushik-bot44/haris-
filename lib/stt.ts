@@ -6,6 +6,7 @@ import {
   fullTranscript,
   type SttState,
 } from "@/lib/stt-reducer";
+import { startWhisperStt as startWhisperSttSync } from "@/lib/stt-whisper";
 
 // Thin browser adapter around the pure reducer. All policy lives in
 // lib/stt-reducer.ts; this file only wires Chrome's SpeechRecognition events
@@ -32,6 +33,29 @@ export function sttSupported(): boolean {
   return Boolean(w.SpeechRecognition || w.webkitSpeechRecognition);
 }
 
+// ——— STT engine selection ———
+// "auto": Chrome's recognizer when present, on-device Whisper otherwise.
+// A network degrade (Brave/Chromium/VPN can't reach Google's speech servers)
+// flips the setting to "whisper" so voice works in ANY browser, even offline.
+const STT_ENGINE_KEY = "pds_stt_engine";
+export type SttEngine = "auto" | "chrome" | "whisper";
+
+export function getSttEngine(): SttEngine {
+  if (typeof window === "undefined") return "auto";
+  try {
+    const v = window.localStorage.getItem(STT_ENGINE_KEY);
+    return v === "chrome" || v === "whisper" ? v : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+export function setSttEngine(engine: SttEngine): void {
+  try {
+    window.localStorage.setItem(STT_ENGINE_KEY, engine);
+  } catch {}
+}
+
 export interface SttSession {
   stop(): SttState;
   /** Stop, then wait for Chrome to finalize buffered audio (it delivers the
@@ -45,6 +69,12 @@ export function startStt(callbacks: {
   onUpdate: (state: SttState) => void;
   onDegrade: (reason: string) => void;
 }): SttSession | null {
+  const engine = getSttEngine();
+  if (engine === "whisper" || (engine === "auto" && !sttSupported())) {
+    // Dynamic import keeps the transformers stack out of the main bundle;
+    // startWhisperStt itself degrades if the model isn't ready yet.
+    return startWhisperSttSync(callbacks);
+  }
   if (!sttSupported()) {
     callbacks.onDegrade("unsupported");
     return null;
