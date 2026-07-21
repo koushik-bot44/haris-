@@ -11,10 +11,14 @@ export interface SttState {
   /** Finalized transcript segments, accumulated ACROSS engine auto-restarts. */
   finalSegments: string[];
   interim: string;
-  /** Timestamp of the last result carrying actual speech — the silence timer anchors here. */
+  /** Silence-timer anchor: last speech-bearing result — OR the restart moment,
+   * so an engine-restart gap is never counted as user silence. */
   lastSpeechT: number | null;
   restartCount: number;
   consecutiveErrors: number;
+  /** Network errors specifically — only these degrade voice mode (attribution
+   * matters: a no-speech blip followed by one network error must not kill voice). */
+  consecutiveNetworkErrors: number;
   failReason: string | null;
   trace: SttTraceEvent[];
 }
@@ -42,6 +46,7 @@ export function initialSttState(): SttState {
     lastSpeechT: null,
     restartCount: 0,
     consecutiveErrors: 0,
+    consecutiveNetworkErrors: 0,
     failReason: null,
     trace: [],
   };
@@ -63,6 +68,23 @@ export function sttReduce(state: SttState, action: SttAction): { state: SttState
     }
 
     case "RESULT": {
+      // Chrome finalizes buffered audio AFTER recognition.stop() — a final
+      // result in the "stopped" phase is the last words of the answer, not
+      // noise. It usually revises the interim we already promoted at STOP, so
+      // replace that segment when the final extends it; otherwise append.
+      if (s.phase === "stopped" && action.isFinal) {
+        const text = action.text.trim();
+        if (text) {
+          s.trace.push({ kind: "result", t: action.t, text: action.text, isFinal: true });
+          const last = s.finalSegments[s.finalSegments.length - 1];
+          if (last && (text.startsWith(last) || last.startsWith(text))) {
+            s.finalSegments = [...s.finalSegments.slice(0, -1), text.length >= last.length ? text : last];
+          } else {
+            s.finalSegments = [...s.finalSegments, text];
+          }
+        }
+        return { state: s, effect: null };
+      }
       if (s.phase !== "listening") return { state: s, effect: null };
       s.trace.push({ kind: "result", t: action.t, text: action.text, isFinal: action.isFinal });
       if (action.isFinal) {
@@ -75,6 +97,7 @@ export function sttReduce(state: SttState, action: SttAction): { state: SttState
       if (action.text.trim()) {
         s.lastSpeechT = action.t;
         s.consecutiveErrors = 0;
+        s.consecutiveNetworkErrors = 0;
       }
       return { state: s, effect: null };
     }
@@ -96,6 +119,10 @@ export function sttReduce(state: SttState, action: SttAction): { state: SttState
       }
       s.restartCount += 1;
       s.trace.push({ kind: "restart", t: action.t });
+      // Refresh the silence anchor: the reconnect gap is engine latency, not
+      // user silence — without this, the silence timer ends answers mid-sentence
+      // whenever Chrome restarts during continuous speech.
+      if (s.lastSpeechT !== null) s.lastSpeechT = action.t;
       return { state: s, effect: { kind: "restart" } };
     }
 
@@ -109,12 +136,17 @@ export function sttReduce(state: SttState, action: SttAction): { state: SttState
       }
       // no-speech / network / aborted: retry once, then degrade. The retry is
       // carried by the ENGINE_END that Chrome fires right after the error —
-      // here we only track the error budget.
+      // here we only track the error budget. Attribution matters: only NETWORK
+      // errors count toward the degrade budget (a no-speech blip followed by a
+      // single network error must not kill voice mode).
       s.consecutiveErrors += 1;
-      if (s.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS && action.error === "network") {
-        s.phase = "failed";
-        s.failReason = "network";
-        return { state: s, effect: { kind: "degrade_to_text", reason: "network" } };
+      if (action.error === "network") {
+        s.consecutiveNetworkErrors += 1;
+        if (s.consecutiveNetworkErrors >= MAX_CONSECUTIVE_ERRORS) {
+          s.phase = "failed";
+          s.failReason = "network";
+          return { state: s, effect: { kind: "degrade_to_text", reason: "network" } };
+        }
       }
       return { state: s, effect: null };
     }

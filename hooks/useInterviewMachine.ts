@@ -52,6 +52,10 @@ export interface InterviewMachine {
   avgLatencyMs: number | null;
   micCheckTranscript: string;
   session: Session | null;
+  /** false = localStorage unavailable; the summary must say so and push the download. */
+  sessionPersisted: boolean;
+  /** Partial transcript rescued when STT degraded mid-answer — seeds the textarea. */
+  degradePrefill: string;
   error: string | null;
   beginMicCheck: () => void;
   confirmMicCheck: () => void;
@@ -74,6 +78,8 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
   const [latencies, setLatencies] = useState<number[]>([]);
   const [micCheckTranscript, setMicCheckTranscript] = useState("");
   const [session, setSession] = useState<Session | null>(null);
+  const [sessionPersisted, setSessionPersisted] = useState(true);
+  const [degradePrefill, setDegradePrefill] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const historyRef = useRef<HistoryEntry[]>([]);
@@ -90,6 +96,8 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
   const endedRef = useRef(false);
   const startedRef = useRef(false);
   const textModeRef = useRef(false);
+  /** Trace captured when STT degraded mid-answer — merged into the text-mode submit. */
+  const pendingTraceRef = useRef<SttTraceEvent[]>([]);
 
   const clearSilenceTimer = () => {
     if (silenceTimerRef.current) {
@@ -109,7 +117,14 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     ackRef.current?.cancel();
   }, []);
 
-  useEffect(() => cleanup, [cleanup]);
+  // StrictMode runs mount → cleanup → mount in dev. The refs survive that
+  // simulated remount, so the flags MUST be re-armed in the effect setup or
+  // the machine is permanently dead before the user clicks anything.
+  useEffect(() => {
+    endedRef.current = false;
+    startedRef.current = false;
+    return cleanup;
+  }, [cleanup]);
 
   const degradeToText = useCallback((reason: string) => {
     textModeRef.current = true;
@@ -145,15 +160,18 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
   const switchToTextMode = useCallback(() => {
     try {
       micCheckSttRef.current?.stop();
-      sttRef.current?.stop();
     } catch {}
     micCheckSttRef.current = null;
-    degradeToText("user_choice");
-    if (phase === "listening") {
+    if (phase === "listening" && sttRef.current) {
+      // Same rescue as onDegrade: what was already spoken prefills the textarea.
       clearSilenceTimer();
-    } else if (phase === "micCheck") {
-      setPhase("preroll");
+      const captured = sttRef.current.stop();
+      sttRef.current = null;
+      setDegradePrefill(fullTranscript(captured));
+      pendingTraceRef.current = captured.trace;
     }
+    degradeToText("user_choice");
+    if (phase === "micCheck") setPhase("preroll");
   }, [degradeToText, phase]);
 
   // ——— interviewer loop ———
@@ -181,7 +199,8 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
       },
       overall: { avgScore: null, summary: "Scoring arrives with weekend 2 — transcript and delivery metrics below." },
     };
-    saveSession(s);
+    const { persisted } = saveSession(s);
+    setSessionPersisted(persisted);
     setSession(s);
     setPhase("done");
   }, [cleanup, role]);
@@ -192,6 +211,8 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
   const beginListening = useCallback(() => {
     if (endedRef.current) return;
     setLastSentence("");
+    setDegradePrefill("");
+    pendingTraceRef.current = [];
     answerStartTRef.current = Date.now();
     setPhase("listening");
     if (textModeRef.current) return; // textarea path — page renders the input
@@ -204,10 +225,17 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
       },
       onDegrade: (reason) => {
         clearSilenceTimer();
+        // Capture BEFORE discarding the session — 45 seconds of a spoken
+        // answer must not vanish because the recognizer died. The partial
+        // transcript prefills the textarea; the trace rides along so metrics
+        // still cover the spoken part.
+        const captured = sttRef.current?.getState();
         sttRef.current = null;
+        if (captured) {
+          setDegradePrefill(fullTranscript(captured));
+          pendingTraceRef.current = captured.trace;
+        }
         degradeToText(reason);
-        // The answer continues in text mode; whatever was already transcribed
-        // is preserved and prefills the textarea via degrade state on the page.
       },
     });
     sttRef.current = sess;
@@ -263,6 +291,9 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
       const data = (await res.json()) as { turn: InterviewerTurn };
       turn = data.turn;
     } catch {
+      // A retried turn must not record the outage + human reaction time as
+      // interviewer latency — drop the anchor for this turn.
+      answerEndTRef.current = null;
       if (!endedRef.current) setPhase("connectionLost");
       return;
     }
@@ -280,6 +311,9 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
       await ackRef.current.done;
       ackRef.current = null;
     }
+    // The user may have left during the ack — every suspension point needs the
+    // guard, or the next question speaks over the home page.
+    if (endedRef.current) return;
 
     const handle = speak(turn.text);
     speakRef.current = handle;
@@ -289,6 +323,7 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
       const endT = answerEndTRef.current;
       answerEndTRef.current = null;
       handle.firstSyllableAt.then((t) => {
+        if (endedRef.current) return;
         latListRef.current = [...latListRef.current, Math.max(0, t - endT)];
         setLatencies(latListRef.current);
       });
@@ -305,15 +340,18 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     }
   }, [beginListening, candidateName, finishInterview, role]);
 
-  const endAnswer = useCallback(() => {
+  const endAnswer = useCallback(async () => {
     clearSilenceTimer();
     const sess = sttRef.current;
     sttRef.current = null;
     if (!sess) return;
-    const st = sess.stop();
+    // Speak the ack immediately (the latency mask), then let Chrome finalize
+    // buffered audio — the last words of the answer arrive AFTER stop().
+    speakAck();
+    const st = await sess.stopAndSettle();
+    if (endedRef.current) return;
     const transcript = fullTranscript(st);
     recordAnswer(transcript, st.trace, st.lastSpeechT ?? Date.now());
-    speakAck();
     void callInterviewer();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callInterviewer, recordAnswer, speakAck]);
@@ -321,13 +359,17 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
   const endAnswerNow = useCallback(() => {
     if (phase !== "listening") return;
     if (textModeRef.current) return; // text mode submits via the textarea
-    endAnswer();
+    void endAnswer();
   }, [endAnswer, phase]);
 
   const submitTextAnswer = useCallback(
     (text: string) => {
       if (phase !== "listening") return;
-      recordAnswer(text, [], Date.now());
+      // If STT degraded mid-answer, the captured trace still covers the spoken
+      // part — merge it so delivery metrics survive the degrade.
+      recordAnswer(text, pendingTraceRef.current, Date.now());
+      pendingTraceRef.current = [];
+      setDegradePrefill("");
       speakAck();
       void callInterviewer();
     },
@@ -361,6 +403,8 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     avgLatencyMs,
     micCheckTranscript,
     session,
+    sessionPersisted,
+    degradePrefill,
     error,
     beginMicCheck,
     confirmMicCheck,

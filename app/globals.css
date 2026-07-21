@@ -12,7 +12,7 @@
   --muted: #9a968e;
   --accent: #e0a458; /* warm amber — the "on-air" lamp */
   --accent-ink: #1a1409;
-  --live: #c4544d; /* recording red — mic actively hearing you */
+  --live: #e07067; /* recording red, lightened for AA contrast on the dark ground */
   --ok: #7fa871;
 
   --font-display: Georgia, "Times New Roman", serif;

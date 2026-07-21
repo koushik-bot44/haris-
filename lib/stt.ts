@@ -34,6 +34,10 @@ export function sttSupported(): boolean {
 
 export interface SttSession {
   stop(): SttState;
+  /** Stop, then wait for Chrome to finalize buffered audio (it delivers the
+   * last final result AFTER recognition.stop()) and return the settled state.
+   * Reading the transcript synchronously at stop() drops the final words. */
+  stopAndSettle(settleMs?: number): Promise<SttState>;
   getState(): SttState;
 }
 
@@ -103,13 +107,22 @@ export function startStt(callbacks: {
     return null;
   }
 
+  const doStop = () => {
+    stopped = true;
+    dispatch({ type: "STOP", t: Date.now() });
+    try {
+      // Handlers stay attached: results delivered after stop() flow into the
+      // reducer's stopped-phase final handling instead of being lost.
+      rec?.stop();
+    } catch {}
+    return state;
+  };
+
   return {
-    stop() {
-      stopped = true;
-      dispatch({ type: "STOP", t: Date.now() });
-      try {
-        rec?.stop();
-      } catch {}
+    stop: doStop,
+    async stopAndSettle(settleMs = 350) {
+      doStop();
+      await new Promise((r) => setTimeout(r, settleMs));
       return state;
     },
     getState() {

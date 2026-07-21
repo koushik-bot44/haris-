@@ -72,6 +72,34 @@ describe("stt reducer", () => {
     expect(second.effects).toContain("degrade_to_text:network");
   });
 
+  it("a no-speech blip does NOT count toward the network degrade budget", () => {
+    const { state } = run([
+      { type: "START", t: 0 },
+      { type: "ERROR", t: 100, error: "no-speech" },
+      { type: "ERROR", t: 300, error: "network" }, // first NETWORK error — survivable
+    ]);
+    expect(state.phase).toBe("listening");
+  });
+
+  it("a restart refreshes the silence anchor so the reconnect gap is not counted as silence", () => {
+    const { state } = run([
+      { type: "START", t: 0 },
+      { type: "RESULT", t: 1000, text: "still talking", isFinal: true },
+      { type: "ENGINE_END", t: 2800 }, // engine died mid-speech, 1.8s after last result
+    ]);
+    expect(state.lastSpeechT).toBe(2800); // anchor moved to the restart moment
+  });
+
+  it("accepts Chrome's post-stop final result, replacing the promoted interim", () => {
+    const { state } = run([
+      { type: "START", t: 0 },
+      { type: "RESULT", t: 500, text: "my final answer is", isFinal: false },
+      { type: "STOP", t: 900 }, // promotes interim
+      { type: "RESULT", t: 1100, text: "my final answer is teamwork", isFinal: true },
+    ]);
+    expect(fullTranscript(state)).toBe("my final answer is teamwork");
+  });
+
   it("a real result resets the consecutive error budget", () => {
     const { state } = run([
       { type: "START", t: 0 },

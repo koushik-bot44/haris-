@@ -34,17 +34,32 @@ function InterviewRoom() {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [m.phase]);
 
-  // Keyboard: Enter ends the current answer (voice mode). Keyboard-first per a11y floor.
+  // Keyboard: Enter ends the current answer (voice mode). Keyboard-first per
+  // a11y floor — but never steal Enter from another focused control (a user
+  // tabbed onto "Leave" pressing Enter means Leave, not "answer done").
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Enter" && !e.shiftKey && m.phase === "listening" && !m.textMode) {
-        e.preventDefault();
-        m.endAnswerNow();
+      if (e.key !== "Enter" || e.shiftKey || m.phase !== "listening" || m.textMode) return;
+      const el = document.activeElement;
+      if (
+        el instanceof HTMLElement &&
+        el.closest("button, a, input, select, textarea") &&
+        !el.dataset.endAnswer
+      ) {
+        return;
       }
+      e.preventDefault();
+      m.endAnswerNow();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [m]);
+
+  // Seed the textarea with whatever was transcribed before STT degraded
+  // mid-answer — 45 seconds of speech must not vanish into an empty box.
+  useEffect(() => {
+    if (m.degradePrefill) setTextDraft((prev) => (prev ? prev : m.degradePrefill));
+  }, [m.degradePrefill]);
 
   const leave = () => {
     m.cleanup();
@@ -84,6 +99,15 @@ function InterviewRoom() {
         </section>
       )}
       {m.phase === "done" && <Summary m={m} />}
+
+      {/* Screen-reader phase announcements — phase swaps unmount the focused
+          button, so an explicit live region carries the transition. */}
+      <div aria-live="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}>
+        {m.phase === "preroll" && "Mic check passed. Interview instructions shown."}
+        {m.phase === "listening" && "Your turn to answer."}
+        {m.phase === "thinking" && "Answer recorded."}
+        {m.phase === "done" && "Round complete. Your results are shown."}
+      </div>
 
       <p className="small muted" style={{ marginTop: 40 }}>
         Keep this tab active during the interview — browsers pause speech in background tabs.
@@ -187,10 +211,10 @@ function Live({ m, textDraft, setTextDraft }: { m: M; textDraft: string; setText
           <span className={`level ${m.hearing ? "active" : ""}`} aria-hidden>
             <span /><span /><span /><span />
           </span>
-          <span className="small" style={{ color: "var(--live)" }}>
+          <span style={{ color: "var(--live)", fontSize: "1.05rem", fontWeight: 600 }}>
             Your turn — speaking
           </span>
-          <button className="btn secondary" onClick={m.endAnswerNow}>
+          <button className="btn secondary" data-end-answer="true" onClick={m.endAnswerNow}>
             I'm done answering (Enter)
           </button>
         </div>
@@ -254,6 +278,13 @@ function Summary({ m }: { m: M }) {
         delivery numbers, and the response-latency measurements.
       </p>
 
+      {!m.sessionPersisted && (
+        <div className="card" role="status" style={{ borderLeft: "3px solid var(--live)", margin: "12px 0" }}>
+          This device can't store sessions (private browsing?) — <strong>download the JSON below</strong> to
+          keep this round; it disappears when the tab closes.
+        </div>
+      )}
+
       {s.deliveryMetrics && (
         <div className="card" style={{ margin: "16px 0" }}>
           <table className="plain mono-num" aria-label="Delivery metrics">
@@ -267,7 +298,7 @@ function Summary({ m }: { m: M }) {
                 <td>{s.deliveryMetrics.fillerCount}</td>
               </tr>
               <tr>
-                <td>Long pauses (&gt;2s)</td>
+                <td>Hesitations (pauses &gt;1.1s)</td>
                 <td>{s.deliveryMetrics.hesitationCount}</td>
               </tr>
               <tr>

@@ -4,8 +4,8 @@ import { GREETING, HR_QUESTIONS, WRAPUP, type HrQuestion } from "@/lib/fixtures/
 export const QUESTIONS_PER_INTERVIEW = 5;
 
 // Deterministic per-session question selection: seed derived from the candidate
-// name + history length keeps a session stable across retries without
-// Math.random() (which would reshuffle mid-interview).
+// name only, so the same session (same name, growing history) always sees the
+// same question set — no Math.random(), which would reshuffle mid-interview.
 function seededPick(seedStr: string, count: number): HrQuestion[] {
   let seed = 0;
   for (let i = 0; i < seedStr.length; i++) seed = (seed * 31 + seedStr.charCodeAt(i)) >>> 0;

@@ -7,7 +7,11 @@ import type { DeliveryMetrics, SttTraceEvent } from "@/lib/types";
 //    silence — excluded from pause detection AND from WPM active-time.
 
 export const METRICS_VERSION = 1 as const;
-export const PAUSE_THRESHOLD_MS = 2000;
+// Must sit BELOW the 1.5s end-of-answer silence timer (a pause longer than the
+// timer ends the answer, so a 2s threshold could never record a hesitation) but
+// ABOVE Chrome's normal inter-result cadence (~0.1–1s during continuous speech,
+// which must not count as pausing). 1.1s is the honest window between the two.
+export const PAUSE_THRESHOLD_MS = 1100;
 
 const FILLER_PATTERNS = [
   /\bbasically\b/gi,
@@ -55,10 +59,14 @@ export function computeDeliveryMetrics(trace: SttTraceEvent[], finalTranscript: 
   let longestPauseMs = 0;
   let pauseTotalMs = 0;
   let hesitationCount = 0;
+  let restartMs = 0;
 
   for (let i = 1; i < pts.length; i++) {
-    if (pts[i].afterRestart) continue; // restart latency, not silence
     const gap = pts[i].t - pts[i - 1].t;
+    if (pts[i].afterRestart) {
+      restartMs += gap; // restart latency: not silence, and not speaking time either
+      continue;
+    }
     if (gap > PAUSE_THRESHOLD_MS) {
       hesitationCount += 1;
       pauseTotalMs += gap;
@@ -67,7 +75,7 @@ export function computeDeliveryMetrics(trace: SttTraceEvent[], finalTranscript: 
   }
 
   const spanMs = pts.length >= 2 ? pts[pts.length - 1].t - pts[0].t : 0;
-  const activeMs = Math.max(spanMs - pauseTotalMs, 1);
+  const activeMs = Math.max(spanMs - pauseTotalMs - restartMs, 1);
   // Below ~3s of usable signal a rate extrapolation is noise, not measurement.
   const wpm = spanMs >= 3000 ? Math.round(words / (activeMs / 60000)) : 0;
 

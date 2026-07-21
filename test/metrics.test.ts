@@ -5,20 +5,20 @@ import type { SttTraceEvent } from "@/lib/types";
 const r = (t: number, text: string, isFinal = true): SttTraceEvent => ({ kind: "result", t, text, isFinal });
 
 describe("delivery metrics", () => {
-  it("counts a >2s gap as a hesitation and tracks the longest pause", () => {
+  it("counts a >1.1s gap as a hesitation and tracks the longest pause", () => {
     const trace: SttTraceEvent[] = [
       { kind: "start", t: 0 },
       r(1000, "so my biggest strength"),
-      r(4500, "is persistence"), // 3.5s gap → pause
-      r(5500, "I never give up"),
-      { kind: "stop", t: 6000 },
+      r(2200, "is persistence"), // 1.2s gap → hesitation (must be countable UNDER the 1.5s end-of-answer rule)
+      r(2700, "I never give up"),
+      { kind: "stop", t: 3200 },
     ];
     const m = computeDeliveryMetrics(trace, "so my biggest strength is persistence I never give up");
     expect(m.hesitationCount).toBe(1);
-    expect(m.longestPauseMs).toBe(3500);
+    expect(m.longestPauseMs).toBe(1200);
   });
 
-  it("excludes gaps that span a recognizer restart from pauses and WPM", () => {
+  it("excludes restart gaps from pauses AND from WPM active time", () => {
     const trace: SttTraceEvent[] = [
       { kind: "start", t: 0 },
       r(1000, "first part of the answer here now"),
@@ -27,9 +27,12 @@ describe("delivery metrics", () => {
       r(9000, "and ends"),
       { kind: "stop", t: 9500 },
     ];
+    // 12 words over an 8s span minus the 7s restart gap = 1s active time;
+    // span >= 3000 so wpm computes over active time only.
     const m = computeDeliveryMetrics(trace, "first part of the answer here now second part continues and ends");
     expect(m.hesitationCount).toBe(0);
     expect(m.longestPauseMs).toBe(0);
+    expect(m.wpm).toBe(Math.round(12 / (1000 / 60000))); // restart gap not counted as speaking time
   });
 
   it("returns wpm 0 below ~3s of usable signal instead of extrapolating noise", () => {
