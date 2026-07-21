@@ -28,6 +28,21 @@ No API key needed. Two brains, picked via `LLM_PROVIDER` (see `.env.example`):
 When a Gemini key exists: `LLM_PROVIDER=gemini` + the key in env — `lib/llm/`
 is the only place that changes.
 
+## Voices (pick on the setup screen)
+
+- **System** — instant, robotic. The floor.
+- **Kokoro (premium on-device)** — natural neural voice in the browser, free
+  forever, ~80MB one-time download.
+- **Chatterbox (studio, local)** — Resemble AI's MIT model (beat ElevenLabs
+  63–65% in blind tests) served from `~/chatterbox-tts-server` on Apple MPS.
+  Start it with `~/chatterbox-tts-server/run.sh`; the picker lights up when
+  it's running. **Voice cloning:** open http://localhost:8004, upload a 5–10s
+  clip, set `CHATTERBOX_VOICE` in `.env.local` to that file name.
+- **ElevenLabs (cloud)** — needs `ELEVENLABS_API_KEY` (free signup tier).
+
+Speech input auto-selects: Chrome's recognizer when reachable, on-device
+Whisper (~40MB, any browser, offline) otherwise.
+
 ## What works today (M1 weekend 1)
 
 - Full spoken HR round: mic check → pre-roll → 5 questions with adaptive

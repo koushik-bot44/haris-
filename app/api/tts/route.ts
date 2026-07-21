@@ -59,6 +59,7 @@ async function speakChatterbox(text: string): Promise<NextResponse> {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
+      model: "tts-1", // required by the OpenAI-compatible schema; value is ignored
       input: text,
       voice: process.env.CHATTERBOX_VOICE ?? "Emily.wav",
       response_format: "wav",
