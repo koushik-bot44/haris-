@@ -14,16 +14,26 @@ export default function SetupPage() {
   const [role, setRole] = useState("general");
   const [engine, setEngine] = useState<VoiceEngine>("system");
   const [elevenAvailable, setElevenAvailable] = useState(false);
+  const [chatterboxAvailable, setChatterboxAvailable] = useState(false);
   const [kokoro, setKokoro] = useState("off");
 
   useEffect(() => {
     setEngine(getVoiceEngine());
-    fetch("/api/tts")
-      .then((r) => r.json())
-      .then((d) => setElevenAvailable(Boolean(d.enabled)))
-      .catch(() => {});
+    const probe = () =>
+      fetch("/api/tts")
+        .then((r) => r.json())
+        .then((d) => {
+          setElevenAvailable(Boolean(d.elevenlabs ?? d.enabled));
+          setChatterboxAvailable(Boolean(d.chatterbox));
+        })
+        .catch(() => {});
+    probe();
+    const probeId = setInterval(probe, 5000); // the local voice server may come up mid-visit
     const id = setInterval(() => setKokoro(kokoroStatus()), 1000);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      clearInterval(probeId);
+    };
   }, []);
 
   const pickEngine = (e: VoiceEngine) => {
@@ -110,6 +120,23 @@ export default function SetupPage() {
               </span>
             </span>
           </label>
+          <label style={{ display: "flex", gap: 8, alignItems: "baseline", opacity: chatterboxAvailable ? 1 : 0.55 }}>
+            <input
+              type="radio"
+              name="voice"
+              disabled={!chatterboxAvailable}
+              checked={engine === "chatterbox"}
+              onChange={() => pickEngine("chatterbox")}
+            />
+            <span>
+              Studio voice (Chatterbox, local) —{" "}
+              <span className="muted small">
+                {chatterboxAvailable
+                  ? "server running ✓ · clone any voice at localhost:8004"
+                  : "start the local voice server (~/chatterbox-tts-server)"}
+              </span>
+            </span>
+          </label>
           <label style={{ display: "flex", gap: 8, alignItems: "baseline", opacity: elevenAvailable ? 1 : 0.55 }}>
             <input
               type="radio"
@@ -119,7 +146,7 @@ export default function SetupPage() {
               onChange={() => pickEngine("elevenlabs")}
             />
             <span>
-              Best voices (ElevenLabs) —{" "}
+              Cloud voices (ElevenLabs) —{" "}
               <span className="muted small">
                 {elevenAvailable ? "enabled" : "add ELEVENLABS_API_KEY to .env.local (free signup tier)"}
               </span>

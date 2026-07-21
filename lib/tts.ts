@@ -10,13 +10,13 @@ import { ensureKokoroLoading, kokoroSpeak, kokoroStatus, PRIYA_VOICE } from "@/l
 
 const ENGINE_KEY = "pds_voice_engine";
 
-export type VoiceEngine = "system" | "kokoro" | "elevenlabs";
+export type VoiceEngine = "system" | "kokoro" | "elevenlabs" | "chatterbox";
 
 export function getVoiceEngine(): VoiceEngine {
   if (typeof window === "undefined") return "system";
   try {
     const v = window.localStorage.getItem(ENGINE_KEY);
-    return v === "kokoro" || v === "elevenlabs" ? v : "system";
+    return v === "kokoro" || v === "elevenlabs" || v === "chatterbox" ? v : "system";
   } catch {
     return "system";
   }
@@ -81,7 +81,7 @@ export interface SpeakHandle {
   firstSyllableAt: Promise<number>;
 }
 
-function elevenLabsSpeak(text: string): SpeakHandle {
+function serverSpeak(text: string, engine: "elevenlabs" | "chatterbox"): SpeakHandle {
   let cancelled = false;
   let source: AudioBufferSourceNode | null = null;
   const abort = new AbortController();
@@ -94,7 +94,7 @@ function elevenLabsSpeak(text: string): SpeakHandle {
       const res = await fetch("/api/tts", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, engine }),
         signal: abort.signal,
       });
       if (!res.ok) throw new Error(`tts_${res.status}`);
@@ -141,7 +141,7 @@ function elevenLabsSpeak(text: string): SpeakHandle {
 
 export function speak(text: string, opts?: { rate?: number; voice?: string }): SpeakHandle {
   const engine = getVoiceEngine();
-  if (engine === "elevenlabs") return elevenLabsSpeak(text);
+  if (engine === "elevenlabs" || engine === "chatterbox") return serverSpeak(text, engine);
   // Premium on-device path: only when the user opted in AND the model finished
   // loading — never make the interview wait on a model download.
   if (engine === "kokoro") {
