@@ -170,13 +170,25 @@ function MicCheck({ m }: { m: M }) {
         <>
           <p className="muted">{micHelp(m.degradeReason)}</p>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <button className="btn" onClick={m.retryVoice}>
+            <button
+              className="btn"
+              onClick={() => {
+                // One click = fresh mic attempt, permission prompt included.
+                m.retryVoice();
+                m.beginMicCheck();
+              }}
+            >
               Try microphone again
             </button>
             <button className="btn secondary" onClick={m.confirmMicCheck}>
               Continue in text mode
             </button>
           </div>
+          {m.degradeReason && (
+            <p className="small muted" style={{ marginTop: 10 }}>
+              diagnostic code: <code>{m.degradeReason}</code>
+            </p>
+          )}
         </>
       )}
     </section>
@@ -288,9 +300,52 @@ function Live({ m, textDraft, setTextDraft }: { m: M; textDraft: string; setText
   );
 }
 
+const CRITERIA_ORDER = ["relevance", "structure", "depth", "communication"] as const;
+const CRITERION_LABEL: Record<string, string> = {
+  relevance: "Relevance",
+  structure: "Structure",
+  depth: "Depth",
+  communication: "Communication",
+};
+
+function QuestionBlock({ entry }: { entry: NonNullable<M["session"]>["perQuestionScores"][number] }) {
+  // Coach ordering: strongest criterion first, weakest last — never a list of failures.
+  const ordered = [...CRITERIA_ORDER].sort((a, b) => entry.scores[b] - entry.scores[a]);
+  const avg = (entry.scores.relevance + entry.scores.structure + entry.scores.depth + entry.scores.communication) / 4;
+  return (
+    <div className="card" style={{ borderLeft: "3px solid var(--accent)" }}>
+      <div className="small muted">Question {entry.questionId} · {avg.toFixed(1)}/5</div>
+      <p style={{ margin: "4px 0 10px", fontFamily: "var(--font-display)" }}>{entry.question}</p>
+      <div style={{ display: "grid", gap: 10 }}>
+        {ordered.map((c) => (
+          <div key={c}>
+            <div className="small mono-num">
+              <strong>{CRITERION_LABEL[c]}</strong> {entry.scores[c]}/5
+            </div>
+            {entry.evidence[c] && (
+              <blockquote
+                style={{ margin: "4px 0", padding: "6px 12px", borderLeft: "2px solid var(--border)", fontFamily: "var(--font-display)", fontSize: "0.98rem" }}
+              >
+                “{entry.evidence[c]}” <span className="small muted">— you</span>
+              </blockquote>
+            )}
+            {entry.tips[c] && <div className="small muted">{entry.tips[c]}</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Summary({ m }: { m: M }) {
   const s = m.session;
   if (!s) return null;
+  // Live scores may trail the saved session (background stragglers) — prefer the richer set.
+  const entries = m.scores.length >= s.perQuestionScores.length ? m.scores : s.perQuestionScores;
+  const avg =
+    entries.length > 0
+      ? entries.reduce((a, e) => a + (e.scores.relevance + e.scores.structure + e.scores.depth + e.scores.communication) / 4, 0) / entries.length
+      : null;
 
   const downloadTrace = () => {
     const blob = new Blob([JSON.stringify(s, null, 2)], { type: "application/json" });
@@ -305,10 +360,21 @@ function Summary({ m }: { m: M }) {
   return (
     <section>
       <h2>Round complete</h2>
-      <p className="muted">
-        Evidence-based scoring arrives with the next build. Today you get the full transcript, your
-        delivery numbers, and the response-latency measurements.
-      </p>
+
+      {/* FIRST: the verdict — score + one strength + one priority fix, large. */}
+      {avg !== null ? (
+        <div className="card" style={{ margin: "12px 0", borderLeft: "3px solid var(--accent)" }}>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: "2.4rem", lineHeight: 1 }} className="mono-num">
+            {avg.toFixed(1)}<span className="muted" style={{ fontSize: "1.2rem" }}>/5</span>
+          </div>
+          <p style={{ margin: "8px 0 0" }}>{s.overall.summary}</p>
+        </div>
+      ) : (
+        <p className="muted">
+          Answers were too short to score this round — aim for 30+ seconds per answer. Transcript and
+          delivery numbers below.
+        </p>
+      )}
 
       {!m.sessionPersisted && (
         <div className="card" role="status" style={{ borderLeft: "3px solid var(--live)", margin: "12px 0" }}>
@@ -345,6 +411,16 @@ function Summary({ m }: { m: M }) {
               )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* THIRD: per-question blocks — strongest criterion first, evidence as
+          pull-quotes from the candidate's own (verified) words. */}
+      {entries.length > 0 && (
+        <div style={{ display: "grid", gap: 12, margin: "20px 0" }}>
+          {entries.map((e) => (
+            <QuestionBlock key={e.questionId} entry={e} />
+          ))}
         </div>
       )}
 

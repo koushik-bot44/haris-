@@ -64,6 +64,12 @@ export const claudeCliProvider: LLMProvider = {
       // Never on a server — scripted flow keeps working instead.
       return computeNextTurn(req.candidateName, req.history);
     }
+    // The greeting is formulaic — serve it instantly from the fixture instead
+    // of waiting ~7s on the CLI. The brain takes over from the first question.
+    // Kills the "clicked Start, heard nothing" dead air at session start.
+    if (req.history.length === 0) {
+      return computeNextTurn(req.candidateName, req.history);
+    }
     try {
       const raw = await runClaude(buildPrompt(req));
       const parsed = parseInterviewerJson(raw);

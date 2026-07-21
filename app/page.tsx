@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { getVoiceEngine, kokoroStatus, setVoiceEngine, type VoiceEngine } from "@/lib/tts";
 
 // Landing = the setup screen (binding UX spec). No marketing hero: the round
 // picker is the first thing on the page, and one real sample scorecard row sits
@@ -11,6 +12,24 @@ export default function SetupPage() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [role, setRole] = useState("general");
+  const [engine, setEngine] = useState<VoiceEngine>("system");
+  const [elevenAvailable, setElevenAvailable] = useState(false);
+  const [kokoro, setKokoro] = useState("off");
+
+  useEffect(() => {
+    setEngine(getVoiceEngine());
+    fetch("/api/tts")
+      .then((r) => r.json())
+      .then((d) => setElevenAvailable(Boolean(d.enabled)))
+      .catch(() => {});
+    const id = setInterval(() => setKokoro(kokoroStatus()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const pickEngine = (e: VoiceEngine) => {
+    setEngine(e);
+    setVoiceEngine(e);
+  };
 
   const start = () => {
     const params = new URLSearchParams({ name: name.trim() || "Candidate", role });
@@ -69,10 +88,49 @@ export default function SetupPage() {
           </select>
         </div>
 
+        <fieldset className="field" style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "12px" }}>
+          <legend className="small muted" style={{ textTransform: "uppercase", letterSpacing: "0.08em", padding: "0 6px" }}>
+            Interviewer voice
+          </legend>
+          <label style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+            <input type="radio" name="voice" checked={engine === "system"} onChange={() => pickEngine("system")} />
+            <span>
+              System voice — <span className="muted small">instant, robotic</span>
+            </span>
+          </label>
+          <label style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+            <input type="radio" name="voice" checked={engine === "kokoro"} onChange={() => pickEngine("kokoro")} />
+            <span>
+              Premium on-device (Kokoro) —{" "}
+              <span className="muted small">
+                natural voice, free forever, ~80MB one-time download
+                {engine === "kokoro" && kokoro === "loading" && " · downloading…"}
+                {engine === "kokoro" && kokoro === "ready" && " · ready ✓"}
+                {engine === "kokoro" && kokoro === "failed" && " · failed — using system voice"}
+              </span>
+            </span>
+          </label>
+          <label style={{ display: "flex", gap: 8, alignItems: "baseline", opacity: elevenAvailable ? 1 : 0.55 }}>
+            <input
+              type="radio"
+              name="voice"
+              disabled={!elevenAvailable}
+              checked={engine === "elevenlabs"}
+              onChange={() => pickEngine("elevenlabs")}
+            />
+            <span>
+              Best voices (ElevenLabs) —{" "}
+              <span className="muted small">
+                {elevenAvailable ? "enabled" : "add ELEVENLABS_API_KEY to .env.local (free signup tier)"}
+              </span>
+            </span>
+          </label>
+        </fieldset>
+
         <p className="small muted">
           Voice interviews need Chrome on a laptop with a microphone. No login, nothing uploaded — your
-          session stays on this device. Free-tier AI processing arrives later; today runs fully offline
-          against a practice interviewer.
+          session stays on this device. The interviewer's brain runs locally through your Claude Code CLI;
+          while the premium voice downloads, the system voice fills in.
         </p>
       </div>
     </main>

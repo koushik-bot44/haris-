@@ -6,10 +6,12 @@ import type {
   HistoryEntry,
   InterviewerTurn,
   RolePreset,
+  RubricEntry,
   Session,
   SttTraceEvent,
   Turn,
 } from "@/lib/types";
+import { composeOverall } from "@/lib/rubric";
 import { startStt, type SttSession } from "@/lib/stt";
 import { fullTranscript, type SttState } from "@/lib/stt-reducer";
 import { speak, type SpeakHandle } from "@/lib/tts";
@@ -53,6 +55,8 @@ export interface InterviewMachine {
   avgLatencyMs: number | null;
   micCheckTranscript: string;
   session: Session | null;
+  /** Live rubric entries as background scoring resolves (may trail the session). */
+  scores: RubricEntry[];
   /** false = localStorage unavailable; the summary must say so and push the download. */
   sessionPersisted: boolean;
   /** Partial transcript rescued when STT degraded mid-answer — seeds the textarea. */
@@ -103,6 +107,15 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
   /** Live mic session that runs WHILE Priya speaks — barge-in + early-start capture. */
   const interruptSttRef = useRef<SttSession | null>(null);
   const ttsTurnStartRef = useRef<number | null>(null);
+  // Background scoring state: one rubric entry per main question; follow-up
+  // answers concatenate onto the parent and trigger a re-score (last wins).
+  const currentQuestionRef = useRef<{ id: number; text: string } | null>(null);
+  const combinedAnswersRef = useRef<Map<number, string>>(new Map());
+  const scoreSeqRef = useRef<Map<number, number>>(new Map());
+  const scoresRef = useRef<Map<number, RubricEntry>>(new Map());
+  const tooShortRef = useRef<Set<number>>(new Set());
+  const pendingScoresRef = useRef<Promise<void>[]>([]);
+  const [scores, setScores] = useState<RubricEntry[]>([]);
   // Fresh-closure helpers assigned every render (see bottom of hook) so memoized
   // callbacks never capture a stale endAnswer — the exact bug class the
   // adversarial review confirmed in this file.
@@ -199,8 +212,15 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
 
   // ——— interviewer loop ———
 
-  const finishInterview = useCallback(() => {
+  const finishInterview = useCallback(async () => {
     cleanup();
+    // Scoring ran in the background during the interview; give stragglers a
+    // short grace window so the saved session carries the full scorecard.
+    await Promise.race([
+      Promise.allSettled(pendingScoresRef.current),
+      new Promise((r) => setTimeout(r, 8000)),
+    ]);
+    const scoredEntries = [...scoresRef.current.values()].sort((a, b) => a.questionId - b.questionId);
     const perAnswer: DeliveryMetrics[] = answersRef.current.map((a) =>
       computeDeliveryMetrics(a.trace, a.transcript),
     );
@@ -213,14 +233,14 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
       codingUsed: false,
       startedAt: turnsRef.current[0]?.tStart ?? Date.now(),
       turns: turnsRef.current,
-      perQuestionScores: [], // rubric scoring lands in M1 weekend 2
+      perQuestionScores: scoredEntries,
       deliveryMetrics: aggregateMetrics(perAnswer),
       metricsVersion: METRICS_VERSION,
       latency: {
         perTurnMs: lat,
         avgMs: lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null,
       },
-      overall: { avgScore: null, summary: "Scoring arrives with weekend 2 — transcript and delivery metrics below." },
+      overall: composeOverall(scoredEntries),
     };
     const { persisted } = saveSession(s);
     setSessionPersisted(persisted);
@@ -267,18 +287,52 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [degradeToText]);
 
-  const recordAnswer = useCallback((transcript: string, trace: SttTraceEvent[], endT: number) => {
-    const text = transcript.trim() || "(no answer)";
-    historyRef.current.push({ speaker: "candidate", text });
-    turnsRef.current.push({
-      speaker: "candidate",
-      text,
-      tStart: answerStartTRef.current,
-      tEnd: Date.now(),
-    });
-    answersRef.current.push({ transcript: text, trace });
-    answerEndTRef.current = endT;
+  const fireScoring = useCallback((qid: number, question: string, combinedAnswer: string) => {
+    const seq = (scoreSeqRef.current.get(qid) ?? 0) + 1;
+    scoreSeqRef.current.set(qid, seq);
+    const p = fetch("/api/score", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ questionId: qid, question, answer: combinedAnswer }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { entry?: RubricEntry; tooShort?: boolean } | null) => {
+        if (!d || scoreSeqRef.current.get(qid) !== seq) return; // stale response
+        if (d.tooShort) tooShortRef.current.add(qid);
+        else if (d.entry) {
+          tooShortRef.current.delete(qid);
+          scoresRef.current.set(qid, d.entry);
+        }
+        setScores([...scoresRef.current.values()].sort((a, b) => a.questionId - b.questionId));
+      })
+      .catch(() => {}); // scoring is best-effort; the round never depends on it
+    pendingScoresRef.current.push(p);
   }, []);
+
+  const recordAnswer = useCallback(
+    (transcript: string, trace: SttTraceEvent[], endT: number) => {
+      const text = transcript.trim() || "(no answer)";
+      historyRef.current.push({ speaker: "candidate", text });
+      turnsRef.current.push({
+        speaker: "candidate",
+        text,
+        tStart: answerStartTRef.current,
+        tEnd: Date.now(),
+      });
+      answersRef.current.push({ transcript: text, trace });
+      answerEndTRef.current = endT;
+
+      // Background scoring: follow-up answers concatenate onto the parent
+      // question's transcript (plan: one rubric entry per questionId).
+      const q = currentQuestionRef.current;
+      if (q && text !== "(no answer)") {
+        const combined = [combinedAnswersRef.current.get(q.id), text].filter(Boolean).join(" ");
+        combinedAnswersRef.current.set(q.id, combined);
+        fireScoring(q.id, q.text, combined);
+      }
+    },
+    [fireScoring],
+  );
 
   const speakAck = useCallback(() => {
     const ack = VERBAL_ACKS[ackCounterRef.current % VERBAL_ACKS.length];
@@ -318,6 +372,13 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     const tStart = Date.now();
     setCaption(turn.text);
     setQuestionIndex(turn.questionIndex);
+    // Track which main question the next answer belongs to (scoring identity):
+    // a follow-up keeps the parent question's id and text.
+    if (turn.type === "question") {
+      currentQuestionRef.current = { id: turn.questionIndex || (currentQuestionRef.current?.id ?? 0) + 1, text: turn.text };
+    } else if (turn.type === "followup" && currentQuestionRef.current === null) {
+      currentQuestionRef.current = { id: Math.max(1, turn.questionIndex), text: turn.text };
+    }
     setPhase("speaking");
 
     // Let the verbal ack finish before the real reply starts (both share the
@@ -508,6 +569,7 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     avgLatencyMs,
     micCheckTranscript,
     session,
+    scores,
     sessionPersisted,
     degradePrefill,
     error,
