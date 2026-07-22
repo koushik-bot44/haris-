@@ -16,6 +16,36 @@ export default function SetupPage() {
   const [elevenAvailable, setElevenAvailable] = useState(false);
   const [chatterboxAvailable, setChatterboxAvailable] = useState(false);
   const [kokoro, setKokoro] = useState("off");
+  const [round, setRound] = useState<"hr" | "technical">("hr");
+  const [resume, setResume] = useState("");
+  const [analysis, setAnalysis] = useState<{
+    strengths: string[];
+    gaps: string[];
+    talkingPoints: string[];
+  } | null>(null);
+  const [analyzer, setAnalyzer] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+
+  const analyze = async () => {
+    setAnalyzing(true);
+    setAnalyzeError(null);
+    try {
+      const res = await fetch("/api/resume-analysis", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ resume }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error ?? "analysis failed");
+      setAnalysis(d.analysis);
+      setAnalyzer(d.analyzer);
+    } catch (e) {
+      setAnalyzeError(e instanceof Error ? e.message : "analysis failed");
+    } finally {
+      setAnalyzing(false);
+    }
+  };
 
   useEffect(() => {
     setEngine(getVoiceEngine());
@@ -41,13 +71,22 @@ export default function SetupPage() {
     setVoiceEngine(e);
   };
 
-  const start = () => {
-    const params = new URLSearchParams({ name: name.trim() || "Candidate", role });
+  const start = (which: "hr" | "technical") => {
+    try {
+      if (resume.trim()) window.sessionStorage.setItem("pds_resume", resume.trim());
+      else window.sessionStorage.removeItem("pds_resume");
+    } catch {}
+    const params = new URLSearchParams({ name: name.trim() || "Candidate", role, round: which });
     router.push(`/interview?${params.toString()}`);
   };
 
   return (
     <main className="wrap">
+      <nav className="small" style={{ display: "flex", gap: 16, marginBottom: 18 }}>
+        <a href="/dashboard">Dashboard</a>
+        <a href="/history">History</a>
+        <a href="/progress">Progress</a>
+      </nav>
       <h1>Pick your round</h1>
       <p className="muted" style={{ marginTop: 0 }}>
         A voice interview with real feedback — spoken questions, adaptive follow-ups, and a scorecard built
@@ -67,16 +106,19 @@ export default function SetupPage() {
 
       <div style={{ display: "grid", gap: "20px", maxWidth: 440 }}>
         <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-          <button className="btn" onClick={start} aria-label="Start HR interview round">
+          <button className="btn" onClick={() => start("hr")} aria-label="Start HR interview round">
             HR Interview — start
           </button>
-          <button className="btn secondary" disabled title="Arrives with M2 (September)">
-            Technical — coming soon
+          <button className="btn" onClick={() => start("technical")} aria-label="Start technical interview round">
+            Technical — start
           </button>
           <button className="btn secondary" disabled title="The Group Discussion room — in the works">
             Group Discussion — in the works
           </button>
         </div>
+        <p className="small muted" style={{ margin: "-8px 0 0" }}>
+          Technical includes a hands-on coding question in a real editor.
+        </p>
 
         <div className="field">
           <label htmlFor="name">Your name (the interviewer uses it)</label>
@@ -97,6 +139,49 @@ export default function SetupPage() {
             <option value="frontend-fresher">Frontend fresher</option>
           </select>
         </div>
+
+        <details>
+          <summary className="small" style={{ cursor: "pointer", color: "var(--muted)" }}>
+            Paste your resume (optional — the interviewer asks about YOUR projects)
+          </summary>
+          <div className="field" style={{ marginTop: 10 }}>
+            <textarea
+              rows={7}
+              value={resume}
+              maxLength={15000}
+              onChange={(e) => setResume(e.target.value)}
+              placeholder="Paste resume text here (not a file). It stays in this browser session."
+            />
+            <p className="small muted" style={{ margin: "4px 0 0" }}>
+              Local AI processing — still, avoid pasting sensitive personal data (phone, address).
+            </p>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <button className="btn secondary" onClick={analyze} disabled={analyzing || resume.trim().length < 80}>
+                {analyzing ? "Analyzing…" : "Analyze my resume"}
+              </button>
+              {analyzeError && <span className="small" style={{ color: "var(--live)" }}>{analyzeError}</span>}
+            </div>
+            {analysis && (
+              <div className="card" style={{ marginTop: 10 }}>
+                <div className="small muted" style={{ textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                  Resume read{analyzer === "heuristic" ? " · basic check (brain offline)" : ""}
+                </div>
+                <p style={{ margin: "8px 0 2px" }}><strong>Working for you</strong></p>
+                <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+                  {analysis.strengths.map((s, i) => <li key={i}>{s}</li>)}
+                </ul>
+                <p style={{ margin: "8px 0 2px" }}><strong>An interviewer will probe</strong></p>
+                <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+                  {analysis.gaps.map((s, i) => <li key={i}>{s}</li>)}
+                </ul>
+                <p style={{ margin: "8px 0 2px" }}><strong>Bring these up yourself</strong></p>
+                <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+                  {analysis.talkingPoints.map((s, i) => <li key={i}>{s}</li>)}
+                </ul>
+              </div>
+            )}
+          </div>
+        </details>
 
         <fieldset className="field" style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "12px" }}>
           <legend className="small muted" style={{ textTransform: "uppercase", letterSpacing: "0.08em", padding: "0 6px" }}>

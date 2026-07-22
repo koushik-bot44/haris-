@@ -61,6 +61,8 @@ export interface InterviewerTurn {
   /** 1-based index of the main question this turn belongs to; 0 for greeting/wrapup. */
   questionIndex: number;
   done: boolean;
+  /** This question is answered in the code editor, not by voice (technical round). */
+  coding?: boolean;
 }
 
 export interface HistoryEntry {
@@ -70,8 +72,9 @@ export interface HistoryEntry {
 
 export interface InterviewRequest {
   role: RolePreset;
-  roundType: "hr";
+  roundType: "hr" | "technical";
   candidateName: string;
+  resume?: string;
   history: HistoryEntry[];
 }
 

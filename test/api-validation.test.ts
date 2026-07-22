@@ -29,9 +29,19 @@ describe("interview request validation (proxy hardening)", () => {
     expect(interviewRequestSchema.safeParse({ ...valid, history }).success).toBe(false);
   });
 
-  it("caps per-message length", () => {
-    const history = [{ speaker: "candidate" as const, text: "x".repeat(4001) }];
-    expect(interviewRequestSchema.safeParse({ ...valid, history }).success).toBe(false);
+  it("caps per-message length (6000 — code answers are longer than speech)", () => {
+    const over = [{ speaker: "candidate" as const, text: "x".repeat(6001) }];
+    expect(interviewRequestSchema.safeParse({ ...valid, history: over }).success).toBe(false);
+    const under = [{ speaker: "candidate" as const, text: "x".repeat(5999) }];
+    expect(interviewRequestSchema.safeParse({ ...valid, history: under }).success).toBe(true);
+  });
+
+  it("accepts the technical round and an optional resume, stripping control chars", () => {
+    expect(interviewRequestSchema.safeParse({ ...valid, roundType: "technical" }).success).toBe(true);
+    const parsed = interviewRequestSchema.safeParse({ ...valid, resume: "line1bell\nline2" });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.resume).toBe("line1bell\nline2");
+    expect(interviewRequestSchema.safeParse({ ...valid, roundType: "gd" }).success).toBe(false);
   });
 
   it("requires a non-empty candidate name and caps it", () => {

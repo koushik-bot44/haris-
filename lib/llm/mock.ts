@@ -29,6 +29,6 @@ export const mockProvider: LLMProvider = {
     if (chaosEnabled() && callCounter % CHAOS_EVERY === 0) {
       throw new ProviderError("simulated 429 (mock chaos)", "rate_limited");
     }
-    return computeNextTurn(req.candidateName, req.history);
+    return computeNextTurn(req.candidateName, req.history, req.roundType, req.role);
   },
 };

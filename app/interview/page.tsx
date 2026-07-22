@@ -1,9 +1,13 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useInterviewMachine } from "@/hooks/useInterviewMachine";
+import { VoiceOrb } from "@/components/VoiceOrb";
 import type { RolePreset } from "@/lib/types";
+
+const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
 export default function InterviewPage() {
   return (
@@ -20,9 +24,23 @@ function InterviewRoom() {
   const role = (["general", "java-sde-fresher", "frontend-fresher"].includes(params.get("role") ?? "")
     ? params.get("role")
     : "general") as RolePreset;
+  const round = params.get("round") === "technical" ? "technical" : "hr";
+  const [resume] = useState(() => {
+    try {
+      return window.sessionStorage.getItem("pds_resume") ?? undefined;
+    } catch {
+      return undefined;
+    }
+  });
 
-  const m = useInterviewMachine(name, role);
+  const m = useInterviewMachine(name, role, round, resume);
   const [textDraft, setTextDraft] = useState("");
+  const [codeDraft, setCodeDraft] = useState("");
+
+  // Fresh starter code whenever a coding turn begins.
+  useEffect(() => {
+    if (m.codingTurn) setCodeDraft(m.codingQuestion.starter);
+  }, [m.codingTurn, m.codingQuestion.starter]);
 
   // Leaving mid-interview loses the answer in progress — warn (UX spec).
   useEffect(() => {
@@ -68,13 +86,13 @@ function InterviewRoom() {
 
   return (
     <main className="wrap">
-      <header style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 28 }}>
-        <div className={`monogram ${m.phase === "speaking" ? "speaking" : ""}`} aria-hidden>
-          PS
+      <header style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 12 }}>
+        <div className={`monogram ${m.phase === "speaking" ? "speaking" : ""}`} aria-hidden style={{ width: 44, height: 44, fontSize: "1rem" }}>
+          {m.persona.initials}
         </div>
         <div style={{ flex: 1 }}>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: "1.1rem" }}>Priya Sharma</div>
-          <div className="small muted">HR · Meridian Corp — mock round</div>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: "1.1rem" }}>{m.persona.name}</div>
+          <div className="small muted">{m.persona.title} — mock round</div>
         </div>
         {m.questionIndex > 0 && m.phase !== "done" && (
           <div className="small muted mono-num">Question {m.questionIndex} of 5</div>
@@ -84,10 +102,25 @@ function InterviewRoom() {
         </button>
       </header>
 
+      {/* The voice orb — center stage while the conversation is live. Glows and
+          morphs from real audio: your mic while you speak, her playback while
+          she does. */}
+      {["thinking", "speaking", "listening"].includes(m.phase) && !m.codingTurn && (
+        <div style={{ display: "flex", justifyContent: "center", margin: "4px 0 8px" }}>
+          <VoiceOrb size={250} />
+        </div>
+      )}
+
       {m.phase === "micCheck" && <MicCheck m={m} />}
       {m.phase === "preroll" && <Preroll m={m} />}
       {(m.phase === "thinking" || m.phase === "speaking" || m.phase === "listening") && (
-        <Live m={m} textDraft={textDraft} setTextDraft={setTextDraft} />
+        <Live
+          m={m}
+          textDraft={textDraft}
+          setTextDraft={setTextDraft}
+          codeDraft={codeDraft}
+          setCodeDraft={setCodeDraft}
+        />
       )}
       {m.phase === "connectionLost" && (
         <section className="card" role="alert">
@@ -222,19 +255,22 @@ function MicCheck({ m }: { m: M }) {
 }
 
 function Preroll({ m }: { m: M }) {
+  const first = m.persona.name.split(" ")[0];
   return (
     <section className="card">
       <h2>Before we start</h2>
       <p>
-        Priya will ask <strong>5 questions — about 10 minutes</strong>. Answer out loud, take your time.
+        {first} will ask <strong>5 questions — about 10 minutes</strong>.
+        {m.persona.initials === "AR" && <> One of them is <strong>hands-on coding</strong> — an editor opens when it's time.</>}{" "}
+        Answer out loud, take your time.
       </p>
       <p>
         <strong>Pausing for ~2 seconds ends your answer</strong> — like handing the turn back to the
         interviewer. You can also press <kbd>Enter</kbd> or the “I'm done answering” button.
       </p>
       <p>
-        This is a real conversation: <strong>you can interrupt Priya any time — just start talking</strong>{" "}
-        and she'll stop and listen. Headphones make this seamless (without them, her own voice through
+        This is a real conversation: <strong>you can interrupt {first} any time — just start talking</strong>{" "}
+        and they'll stop and listen. Headphones make this seamless (without them, their voice through
         your speakers can confuse the mic).
       </p>
       <button className="btn" onClick={m.startInterview}>
@@ -244,11 +280,28 @@ function Preroll({ m }: { m: M }) {
   );
 }
 
-function Live({ m, textDraft, setTextDraft }: { m: M; textDraft: string; setTextDraft: (s: string) => void }) {
+function Live({
+  m,
+  textDraft,
+  setTextDraft,
+  codeDraft,
+  setCodeDraft,
+}: {
+  m: M;
+  textDraft: string;
+  setTextDraft: (s: string) => void;
+  codeDraft: string;
+  setCodeDraft: (s: string) => void;
+}) {
   const submitText = () => {
     if (!textDraft.trim()) return;
     m.submitTextAnswer(textDraft.trim());
     setTextDraft("");
+  };
+  const submitCode = () => {
+    if (!codeDraft.trim()) return;
+    m.submitTextAnswer(codeDraft);
+    setCodeDraft("");
   };
 
   return (
@@ -257,12 +310,36 @@ function Live({ m, textDraft, setTextDraft }: { m: M; textDraft: string; setText
       <div className="card" aria-live="polite" style={{ minHeight: 96 }}>
         {m.phase === "thinking" ? (
           <p className="muted" style={{ margin: 0 }}>
-            Priya is thinking…
+            {m.persona.name.split(" ")[0]} is thinking…
           </p>
         ) : (
           <p style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: "1.15rem" }}>{m.caption}</p>
         )}
       </div>
+
+      {/* Coding turn: the editor IS the answer surface (technical round Q3). */}
+      {m.codingTurn && m.phase === "listening" && (
+        <div style={{ marginTop: 20, display: "grid", gap: 12 }}>
+          <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden" }}>
+            <MonacoEditor
+              height="320px"
+              language={m.codingQuestion.language}
+              theme="vs-dark"
+              value={codeDraft}
+              onChange={(v) => setCodeDraft(v ?? "")}
+              options={{ minimap: { enabled: false }, fontSize: 14, scrollBeyondLastLine: false }}
+            />
+          </div>
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <button className="btn" onClick={submitCode} disabled={!codeDraft.trim()}>
+              Submit code
+            </button>
+            <span className="small muted">
+              Talk through your approach in comments — the interviewer reads them too.
+            </span>
+          </div>
+        </div>
+      )}
 
       {m.phase === "speaking" && !m.textMode && (
         <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
@@ -273,7 +350,7 @@ function Live({ m, textDraft, setTextDraft }: { m: M; textDraft: string; setText
         </div>
       )}
 
-      {m.phase === "listening" && !m.textMode && (
+      {m.phase === "listening" && !m.textMode && !m.codingTurn && (
         <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
           <span className={`level ${m.hearing ? "active" : ""}`} aria-hidden>
             <span /><span /><span /><span />
@@ -293,7 +370,7 @@ function Live({ m, textDraft, setTextDraft }: { m: M; textDraft: string; setText
         </p>
       )}
 
-      {m.phase === "listening" && m.textMode && (
+      {m.phase === "listening" && m.textMode && !m.codingTurn && (
         <div style={{ marginTop: 20 }} className="field">
           <label htmlFor="answer">Type your answer</label>
           <textarea

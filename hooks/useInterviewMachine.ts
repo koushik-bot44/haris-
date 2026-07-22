@@ -20,6 +20,16 @@ import { decideBargeIn, echoOverlap, ECHO_OVERLAP_THRESHOLD } from "@/lib/barge-
 import { aggregateMetrics, computeDeliveryMetrics, METRICS_VERSION } from "@/lib/metrics";
 import { newSessionId, saveSession } from "@/lib/session-store";
 import { VERBAL_ACKS } from "@/lib/fixtures/hr-questions";
+import { CODING_QUESTIONS, TECH_PERSONA, type CodingQuestion } from "@/lib/fixtures/technical-questions";
+import { setVizMode, startMicViz, stopMicViz } from "@/lib/audio-viz";
+
+export interface Persona {
+  name: string;
+  title: string;
+  initials: string;
+}
+
+const HR_PERSONA: Persona = { name: "Priya Sharma", title: "HR, Meridian Corp", initials: "PS" };
 
 // The interview room state machine from the plan:
 // micCheck → preroll → thinking → speaking → listening → … → done
@@ -63,6 +73,10 @@ export interface InterviewMachine {
   /** Partial transcript rescued when STT degraded mid-answer — seeds the textarea. */
   degradePrefill: string;
   error: string | null;
+  /** True while the current question is answered in the code editor. */
+  codingTurn: boolean;
+  codingQuestion: CodingQuestion;
+  persona: Persona;
   beginMicCheck: () => void;
   confirmMicCheck: () => void;
   switchToTextMode: () => void;
@@ -74,8 +88,14 @@ export interface InterviewMachine {
   cleanup: () => void;
 }
 
-export function useInterviewMachine(candidateName: string, role: RolePreset): InterviewMachine {
+export function useInterviewMachine(
+  candidateName: string,
+  role: RolePreset,
+  roundType: "hr" | "technical" = "hr",
+  resume?: string,
+): InterviewMachine {
   const [phase, setPhase] = useState<Phase>("micCheck");
+  const [codingTurn, setCodingTurn] = useState(false);
   const [textMode, setTextMode] = useState(false);
   const [degradeReason, setDegradeReason] = useState<string | null>(null);
   const [caption, setCaption] = useState("");
@@ -108,6 +128,8 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
   /** Live mic session that runs WHILE Priya speaks — barge-in + early-start capture. */
   const interruptSttRef = useRef<SttSession | null>(null);
   const ttsTurnStartRef = useRef<number | null>(null);
+  const codingActiveRef = useRef(false);
+  const codingUsedRef = useRef(false);
   // Background scoring state: one rubric entry per main question; follow-up
   // answers concatenate onto the parent and trigger a re-score (last wins).
   const currentQuestionRef = useRef<{ id: number; text: string } | null>(null);
@@ -140,6 +162,8 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     } catch {}
     speakRef.current?.cancel();
     ackRef.current?.cancel();
+    stopMicViz();
+    setVizMode("idle");
   }, []);
 
   // StrictMode runs mount → cleanup → mount in dev. The refs survive that
@@ -188,6 +212,8 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
       micCheckSttRef.current?.stop();
     } catch {}
     micCheckSttRef.current = null;
+    // Permission is granted by now — open the orb's true-amplitude mic tap.
+    if (!textModeRef.current) void startMicViz();
     setPhase("preroll");
   }, []);
 
@@ -239,8 +265,8 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
       _id: newSessionId(),
       userId: null,
       role,
-      roundType: "hr",
-      codingUsed: false,
+      roundType,
+      codingUsed: codingUsedRef.current,
       startedAt: turnsRef.current[0]?.tStart ?? Date.now(),
       turns: turnsRef.current,
       perQuestionScores: scoredEntries,
@@ -256,7 +282,7 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     setSessionPersisted(persisted);
     setSession(s);
     setPhase("done");
-  }, [cleanup, role]);
+  }, [cleanup, role, roundType]);
 
   const latListRef = useRef<number[]>([]);
   const latenciesRef = () => latListRef.current;
@@ -268,6 +294,7 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     pendingTraceRef.current = [];
     answerStartTRef.current = Date.now();
     setPhase("listening");
+    if (codingActiveRef.current) return; // code-editor path — no mic for this answer
     if (textModeRef.current) return; // textarea path — page renders the input
 
     const sess = startStt({
@@ -332,11 +359,22 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
       answersRef.current.push({ transcript: text, trace });
       answerEndTRef.current = endT;
 
+      // Code answers are fenced so the scorer and the interviewer both see
+      // them as code, and the session records the coding module was exercised.
+      let scoringText = text;
+      if (codingActiveRef.current && text !== "(no answer)") {
+        codingUsedRef.current = true;
+        scoringText = "```\n" + text + "\n```";
+        historyRef.current[historyRef.current.length - 1].text = scoringText;
+        codingActiveRef.current = false;
+        setCodingTurn(false);
+      }
+
       // Background scoring: follow-up answers concatenate onto the parent
       // question's transcript (plan: one rubric entry per questionId).
       const q = currentQuestionRef.current;
       if (q && text !== "(no answer)") {
-        const combined = [combinedAnswersRef.current.get(q.id), text].filter(Boolean).join(" ");
+        const combined = [combinedAnswersRef.current.get(q.id), scoringText].filter(Boolean).join(" ");
         combinedAnswersRef.current.set(q.id, combined);
         fireScoring(q.id, q.text, combined);
       }
@@ -361,8 +399,9 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           role,
-          roundType: "hr",
+          roundType,
           candidateName,
+          ...(resume ? { resume } : {}),
           history: historyRef.current,
         }),
       });
@@ -382,6 +421,8 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     const tStart = Date.now();
     setCaption(turn.text);
     setQuestionIndex(turn.questionIndex);
+    codingActiveRef.current = Boolean(turn.coding);
+    setCodingTurn(Boolean(turn.coding));
     // Track which main question the next answer belongs to (scoring identity):
     // a follow-up keeps the parent question's id and text.
     if (turn.type === "question") {
@@ -424,7 +465,7 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     // and listens like a real interviewer); a quieter early start is captured
     // and becomes the beginning of the answer instead of being lost.
     const promo = { promoted: false };
-    if (!textModeRef.current && !turn.done) {
+    if (!textModeRef.current && !turn.done && !turn.coding) {
       const holder: { sess: SttSession | null } = { sess: null };
       holder.sess = startStt({
         onUpdate: (s: SttState) => {
@@ -492,7 +533,7 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
       }
       beginListening();
     }
-  }, [beginListening, candidateName, degradeToText, finishInterview, role]);
+  }, [beginListening, candidateName, degradeToText, finishInterview, role, roundType, resume]);
 
   const endAnswer = useCallback(async () => {
     clearSilenceTimer();
@@ -529,6 +570,15 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     },
     [callInterviewer, phase, recordAnswer, speakAck],
   );
+
+  // Voice-orb mode follows the machine phase; the level itself is fed by the
+  // audio paths (mic analyser, playback taps, pseudo envelope).
+  useEffect(() => {
+    if (phase === "listening" && !textMode) setVizMode("user");
+    else if (phase === "speaking") setVizMode("ai");
+    else if (phase === "thinking") setVizMode("thinking");
+    else setVizMode("idle");
+  }, [phase, textMode]);
 
   // Assigned every render so these closures always see the CURRENT endAnswer —
   // memoized callbacks call through the ref instead of capturing directly.
@@ -581,6 +631,9 @@ export function useInterviewMachine(candidateName: string, role: RolePreset): In
     session,
     scores,
     sessionPersisted,
+    codingTurn,
+    codingQuestion: CODING_QUESTIONS[role],
+    persona: roundType === "technical" ? TECH_PERSONA : HR_PERSONA,
     degradePrefill,
     error,
     beginMicCheck,
