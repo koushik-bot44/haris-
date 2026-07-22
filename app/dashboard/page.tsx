@@ -5,9 +5,10 @@
 // evidence quote. Not a grid of averages.
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { loadSessions } from "@/lib/session-store";
 import { CRITERION_LABEL, latestWeakest, scoredSessions, sessionAvg, type FixFirst } from "@/lib/report-utils";
-import { EmptyState, ReportNav } from "@/components/ReportNav";
+import { EmptyState } from "@/components/ReportNav";
 import type { Session } from "@/lib/types";
 
 export default function DashboardPage() {
@@ -25,33 +26,47 @@ export default function DashboardPage() {
 
   return (
     <main className="wrap">
-      <ReportNav active="dashboard" />
       <h1>Before your next interview</h1>
       {!fix || !latest ? (
         <EmptyState message="Your first scorecard will appear here — do one round and the dashboard tells you the single thing to fix next." />
       ) : (
         <>
-          <div className="card" style={{ borderLeft: "3px solid var(--live)", marginBottom: 16 }}>
-            <div className="small muted" style={{ textTransform: "uppercase", letterSpacing: "0.08em" }}>
-              Fix first · {CRITERION_LABEL[fix.criterion]} {fix.score}/5
+          <div className="card raised" style={{ margin: "var(--space-3) 0" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 600 }}>Fix this first</span>
+              <span className="chip">
+                <span className="dot" style={{ background: `var(--c-${fix.criterion})` }} />
+                {CRITERION_LABEL[fix.criterion]} <span className="mono-num">{fix.score}/5</span>
+              </span>
             </div>
-            <p style={{ margin: "8px 0 4px" }}>
-              On <em>“{fix.question}”</em>
+            <p className="small muted" style={{ margin: "8px 0 0" }}>
+              On “{fix.question}”
             </p>
             {fix.evidence && (
-              <blockquote style={{ margin: "8px 0", padding: "6px 12px", borderLeft: "2px solid var(--border)", fontFamily: "var(--font-display)" }}>
-                “{fix.evidence}” <span className="small muted">— you</span>
-              </blockquote>
+              <figure className="pullquote">
+                {fix.evidence}
+                <figcaption
+                  className="small muted"
+                  style={{ fontStyle: "normal", fontFamily: "var(--font-ui)", marginTop: 2 }}
+                >
+                  — you
+                </figcaption>
+              </figure>
             )}
-            {fix.tip && <p className="small muted" style={{ margin: 0 }}>{fix.tip}</p>}
+            {fix.tip && (
+              <p className="small" style={{ margin: "0 0 4px" }}>
+                <strong>Try:</strong> <span className="muted">{fix.tip}</span>
+              </p>
+            )}
+            <p className="small" style={{ margin: "12px 0 0" }}>
+              <Link href={`/report/${fix.sessionId}`} className="muted" style={{ textDecoration: "none" }}>
+                See the full report →
+              </Link>
+            </p>
           </div>
-          <p className="muted">
-            Latest round: <strong className="mono-num">{sessionAvg(latest)?.toFixed(1)}/5</strong> ·{" "}
-            {latest.overall.summary}
-          </p>
-          <p className="small muted">
-            {scored.length} scored round{scored.length === 1 ? "" : "s"} on this device.{" "}
-            <a href="/history">See all</a>
+          <p className="muted small">
+            Latest round <strong className="mono-num" style={{ color: "var(--text)" }}>{sessionAvg(latest)?.toFixed(1)}/5</strong>{" "}
+            · {scored.length} scored round{scored.length === 1 ? "" : "s"} on this device
           </p>
         </>
       )}

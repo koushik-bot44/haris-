@@ -5,27 +5,32 @@
 
 import { useEffect, useState } from "react";
 import { loadSessions } from "@/lib/session-store";
-import { CRITERIA, CRITERION_LABEL, criterionTrend, sessionAvg, scoredSessions } from "@/lib/report-utils";
-import { EmptyState, ReportNav } from "@/components/ReportNav";
+import { CRITERIA, CRITERION_LABEL, criterionTrend, roundLabel, sessionAvg, scoredSessions } from "@/lib/report-utils";
+import { EmptyState } from "@/components/ReportNav";
 import type { Session } from "@/lib/types";
-import type { Criterion } from "@/lib/rubric";
 
-const LINE_COLORS: Record<Criterion, string> = {
-  relevance: "#e0a458",
-  structure: "#7fa871",
-  depth: "#8ba7c7",
-  communication: "#c78bb4",
-};
+// Criterion tokens are the only data colors — inline SVG resolves CSS vars
+// directly, so stroke="var(--c-…)" needs no JS color plumbing.
 
 function TrendChart({ trend }: { trend: ReturnType<typeof criterionTrend> }) {
+  // Fixed coordinate space, fluid rendering — viewBox + width:100% scales to
+  // the wrap column instead of forcing a horizontal scroll.
   const W = 640;
-  const H = 220;
+  const H = 232;
   const PAD = 28;
   const x = (i: number) => PAD + (i / Math.max(1, trend.length - 1)) * (W - PAD * 2);
-  const y = (v: number) => H - PAD - ((v - 1) / 4) * (H - PAD * 2);
+  const y = (v: number) => H - PAD - 14 - ((v - 1) / 4) * (H - PAD * 2 - 14);
+  const baseline = y(1);
+  // Thin x labels so long histories never overlap; endpoints always shown.
+  const labelEvery = Math.max(1, Math.ceil(trend.length / 6));
   return (
-    <div style={{ overflowX: "auto" }}>
-      <svg width={W} height={H} role="img" aria-label="Score trend across sessions, 1 to 5, per criterion">
+    <div>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        style={{ width: "100%", height: "auto", display: "block" }}
+        role="img"
+        aria-label="Score trend across sessions, 1 to 5, per criterion"
+      >
         {[1, 2, 3, 4, 5].map((v) => (
           <g key={v}>
             <line x1={PAD} x2={W - PAD} y1={y(v)} y2={y(v)} stroke="var(--border)" strokeWidth={1} />
@@ -34,24 +39,40 @@ function TrendChart({ trend }: { trend: ReturnType<typeof criterionTrend> }) {
             </text>
           </g>
         ))}
-        {CRITERIA.map((c) => (
-          <g key={c}>
-            <polyline
-              fill="none"
-              stroke={LINE_COLORS[c]}
-              strokeWidth={2}
-              points={trend.map((p, i) => `${x(i)},${y(p.scores[c])}`).join(" ")}
-            />
-            {trend.map((p, i) => (
-              <circle key={i} cx={x(i)} cy={y(p.scores[c])} r={3} fill={LINE_COLORS[c]} />
-            ))}
-          </g>
-        ))}
+        {trend.map((p, i) =>
+          i % labelEvery === 0 || i === trend.length - 1 ? (
+            <text key={i} x={x(i)} y={H - 8} fill="var(--muted)" fontSize={10} textAnchor="middle">
+              {new Date(p.t).toLocaleDateString([], { month: "short", day: "numeric" })}
+            </text>
+          ) : null,
+        )}
+        {CRITERIA.map((c) => {
+          const line = trend.map((p, i) => `${x(i)},${y(p.scores[c])}`).join(" ");
+          const area = `${line} ${x(trend.length - 1)},${baseline} ${x(0)},${baseline}`;
+          return (
+            <g key={c}>
+              <polygon fill={`var(--c-${c})`} fillOpacity={0.06} stroke="none" points={area} />
+              <polyline fill="none" stroke={`var(--c-${c})`} strokeWidth={2} points={line} />
+              {trend.map((p, i) => (
+                <circle key={i} cx={x(i)} cy={y(p.scores[c])} r={3} fill={`var(--c-${c})`} />
+              ))}
+            </g>
+          );
+        })}
       </svg>
-      <div className="small" style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+      <div className="small" style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 6 }}>
         {CRITERIA.map((c) => (
           <span key={c} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span style={{ width: 10, height: 3, background: LINE_COLORS[c], display: "inline-block" }} />
+            <span
+              aria-hidden
+              style={{
+                width: 9,
+                height: 9,
+                borderRadius: "50%",
+                background: `var(--c-${c})`,
+                display: "inline-block",
+              }}
+            />
             {CRITERION_LABEL[c]}
           </span>
         ))}
@@ -74,7 +95,6 @@ export default function ProgressPage() {
 
   return (
     <main className="wrap">
-      <ReportNav active="progress" />
       <h1>Progress</h1>
       {scored.length === 0 ? (
         <EmptyState message="Progress tracking starts with your first scored round." />
@@ -88,7 +108,7 @@ export default function ProgressPage() {
               {scored.map((s) => (
                 <tr key={s._id}>
                   <td className="mono-num">{new Date(s.startedAt).toLocaleDateString()}</td>
-                  <td>{s.roundType === "technical" ? "Technical" : "HR"}</td>
+                  <td>{roundLabel(s.roundType)}</td>
                   <td className="mono-num" style={{ textAlign: "right" }}>
                     {sessionAvg(s)?.toFixed(1)}/5
                   </td>
