@@ -3,8 +3,10 @@
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import { extractPdfText, ResumeExtractError } from "@/lib/resume-extract";
+import { buildResumeProfile } from "@/lib/resume-profile";
 import { getVoiceEngine, hasStoredVoiceChoice, kokoroStatus, setVoiceEngine, type VoiceEngine } from "@/lib/tts";
 import { getPreferredVoice, setPreferredVoice } from "@/lib/voices";
+import type { CodeLanguage } from "@/lib/types";
 
 // Landing = the setup screen (binding UX spec). No marketing hero: the round
 // picker is the first thing on the page, and one real sample scorecard row sits
@@ -43,6 +45,16 @@ function rovingRadio<T>(values: T[], selected: T | null, select: (v: T) => void)
   });
 }
 
+// All five coding-round languages — the exercise and the Monaco editor follow
+// this choice (values are Monaco language ids, pinned as CodeLanguage).
+const CODE_LANGS: { id: CodeLanguage; label: string }[] = [
+  { id: "java", label: "Java" },
+  { id: "python", label: "Python" },
+  { id: "cpp", label: "C++" },
+  { id: "javascript", label: "JavaScript" },
+  { id: "c", label: "C" },
+];
+
 // Curated studio voices (28 available on the local server — these four carry).
 const STUDIO_VOICES: { file: string; name: string; desc: string }[] = [
   { file: "Elena.wav", name: "Elena", desc: "warm, steady — the default" },
@@ -61,6 +73,7 @@ export default function SetupPage() {
   const [chatterboxAvailable, setChatterboxAvailable] = useState(false);
   const [kokoro, setKokoro] = useState("off");
   const [round, setRound] = useState<Round>("hr");
+  const [codeLang, setCodeLang] = useState<CodeLanguage>("java");
   const [resume, setResume] = useState("");
   const [analysis, setAnalysis] = useState<{
     strengths: string[];
@@ -75,6 +88,18 @@ export default function SetupPage() {
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [extracting, setExtracting] = useState(false);
   const pdfInputRef = useRef<HTMLInputElement>(null);
+  const autoAnalyzeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastAutoAnalyzedRef = useRef("");
+
+  // Every resume-text change re-derives the deterministic profile so the
+  // interview page can read it even on paste-then-immediately-start.
+  const writeProfile = (text: string) => {
+    try {
+      const t = text.trim();
+      if (t) window.sessionStorage.setItem("pds_resume_profile", JSON.stringify(buildResumeProfile(t)));
+      else window.sessionStorage.removeItem("pds_resume_profile");
+    } catch {}
+  };
 
   const onPdfPick = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -88,6 +113,13 @@ export default function SetupPage() {
       const text = await extractPdfText(file);
       setResume(text);
       setAnalysis(null); // stale analysis would describe the old text
+      writeProfile(text);
+      // Auto-analyze the extraction (80 = the API's minimum); the button
+      // stays as a manual re-run.
+      if (text.trim().length >= 80) {
+        lastAutoAnalyzedRef.current = text.trim();
+        void analyze(text);
+      }
     } catch (err) {
       setAnalyzeError(
         err instanceof ResumeExtractError ? err.message : "Couldn't read that PDF — paste the text instead.",
@@ -97,14 +129,29 @@ export default function SetupPage() {
     }
   };
 
-  const analyze = async () => {
+  // Typed/pasted changes: profile is instant; a substantial paste (≥300 chars)
+  // auto-analyzes after 1.5s of quiet so mid-edit keystrokes don't burn calls.
+  const onResumeChange = (text: string) => {
+    setResume(text);
+    writeProfile(text);
+    if (autoAnalyzeTimerRef.current) clearTimeout(autoAnalyzeTimerRef.current);
+    const t = text.trim();
+    if (t.length >= 300 && t !== lastAutoAnalyzedRef.current) {
+      autoAnalyzeTimerRef.current = setTimeout(() => {
+        lastAutoAnalyzedRef.current = t;
+        void analyze(t);
+      }, 1500);
+    }
+  };
+
+  const analyze = async (textOverride?: string) => {
     setAnalyzing(true);
     setAnalyzeError(null);
     try {
       const res = await fetch("/api/resume-analysis", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ resume }),
+        body: JSON.stringify({ resume: textOverride ?? resume }),
       });
       const d = await res.json();
       // 429s carry a friendly d.message (quota text) — prefer it over the
@@ -122,6 +169,12 @@ export default function SetupPage() {
   useEffect(() => {
     setEngine(getVoiceEngine());
     setVoiceFile(getPreferredVoice());
+    // Restore a previously chosen coding language (set in-effect, not in the
+    // initializer — sessionStorage reads during SSR/hydration would mismatch).
+    try {
+      const stored = window.sessionStorage.getItem("pds_code_lang");
+      if (CODE_LANGS.some((l) => l.id === stored)) setCodeLang(stored as CodeLanguage);
+    } catch {}
     const probe = () =>
       fetch("/api/tts")
         .then((r) => r.json())
@@ -143,8 +196,16 @@ export default function SetupPage() {
     return () => {
       clearInterval(id);
       clearInterval(probeId);
+      if (autoAnalyzeTimerRef.current) clearTimeout(autoAnalyzeTimerRef.current);
     };
   }, []);
+
+  const pickCodeLang = (lang: CodeLanguage) => {
+    setCodeLang(lang);
+    try {
+      window.sessionStorage.setItem("pds_code_lang", lang);
+    } catch {}
+  };
 
   const pickEngine = (e: VoiceEngine) => {
     setEngine(e);
@@ -163,8 +224,16 @@ export default function SetupPage() {
       return;
     }
     try {
-      if (resume.trim()) window.sessionStorage.setItem("pds_resume", resume.trim());
-      else window.sessionStorage.removeItem("pds_resume");
+      const trimmed = resume.trim();
+      if (trimmed) {
+        window.sessionStorage.setItem("pds_resume", trimmed);
+        // Written BEFORE navigation — covers paste-then-immediately-start.
+        window.sessionStorage.setItem("pds_resume_profile", JSON.stringify(buildResumeProfile(trimmed)));
+      } else {
+        window.sessionStorage.removeItem("pds_resume");
+        window.sessionStorage.removeItem("pds_resume_profile");
+      }
+      window.sessionStorage.setItem("pds_code_lang", codeLang);
     } catch {}
     const params = new URLSearchParams({ name: name.trim() || "Candidate", role, round });
     router.push(`/interview?${params.toString()}`);
@@ -256,6 +325,19 @@ export default function SetupPage() {
           </div>
         </div>
 
+        {/* Technical-round options: the coding exercise + editor follow this. */}
+        {round === "technical" && (
+          <div className="field">
+            <label htmlFor="code-lang">Coding language</label>
+            <select id="code-lang" value={codeLang} onChange={(e) => pickCodeLang(e.target.value as CodeLanguage)}>
+              {CODE_LANGS.map((l) => (
+                <option key={l.id} value={l.id}>{l.label}</option>
+              ))}
+            </select>
+            <span className="hint">The hands-on question and editor match it.</span>
+          </div>
+        )}
+
         <details>
           <summary className="small" style={{ cursor: "pointer", color: "var(--muted)" }}>
             Add your resume (optional — the interviewer asks about YOUR projects)
@@ -265,7 +347,7 @@ export default function SetupPage() {
               rows={7}
               value={resume}
               maxLength={15000}
-              onChange={(e) => setResume(e.target.value)}
+              onChange={(e) => onResumeChange(e.target.value)}
               placeholder="Paste resume text here, or upload the PDF below. It stays in this browser session."
             />
             <p className="small muted" style={{ margin: "4px 0 0" }}>
@@ -277,7 +359,7 @@ export default function SetupPage() {
               <button className="btn secondary" onClick={() => pdfInputRef.current?.click()} disabled={extracting}>
                 {extracting ? "Reading PDF…" : "Upload PDF resume"}
               </button>
-              <button className="btn secondary" onClick={analyze} disabled={analyzing || resume.trim().length < 80}>
+              <button className="btn secondary" onClick={() => analyze()} disabled={analyzing || resume.trim().length < 80}>
                 {analyzing ? "Analyzing…" : "Analyze my resume"}
               </button>
               {analyzeError && <span className="small" style={{ color: "var(--live)" }}>{analyzeError}</span>}

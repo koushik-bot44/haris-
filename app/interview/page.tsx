@@ -11,7 +11,8 @@ import { DeliveryRow } from "@/components/report/DeliveryRow";
 import { QuestionCard } from "@/components/report/QuestionCard";
 import { TurnTimeline } from "@/components/report/TurnTimeline";
 import { getVoiceEngine, lastEngineUsed, type VoiceEngine } from "@/lib/tts";
-import type { RolePreset } from "@/lib/types";
+import { codingQuestionFor, type CodingQuestion } from "@/lib/fixtures/technical-questions";
+import type { CodeLanguage, RolePreset } from "@/lib/types";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
@@ -32,6 +33,15 @@ const ENGINE_LABEL: Record<VoiceEngine, string> = {
   elevenlabs: "Cloud voice",
   kokoro: "On-device voice",
   system: "System voice",
+};
+
+const CODE_LANGS: CodeLanguage[] = ["java", "python", "cpp", "javascript", "c"];
+const LANG_LABEL: Record<CodeLanguage, string> = {
+  java: "Java",
+  python: "Python",
+  cpp: "C++",
+  javascript: "JavaScript",
+  c: "C",
 };
 
 export default function InterviewPage() {
@@ -57,6 +67,17 @@ function InterviewRoom() {
       return undefined;
     }
   });
+  // Language picked on the setup screen — the problem stays per-role, but the
+  // starter + Monaco mode follow the choice (junk/missing storage → java).
+  const [codeLang] = useState<CodeLanguage>(() => {
+    try {
+      const v = window.sessionStorage.getItem("pds_code_lang");
+      return CODE_LANGS.includes(v as CodeLanguage) ? (v as CodeLanguage) : "java";
+    } catch {
+      return "java";
+    }
+  });
+  const codingQ = codingQuestionFor(role, codeLang);
 
   const m = useInterviewMachine(name, role, round, resume);
   const [textDraft, setTextDraft] = useState("");
@@ -69,10 +90,10 @@ function InterviewRoom() {
     setEngine(lastEngineUsed() ?? getVoiceEngine());
   }, [m.phase]);
 
-  // Fresh starter code whenever a coding turn begins.
+  // Fresh starter code whenever a coding turn begins — language-matched.
   useEffect(() => {
-    if (m.codingTurn) setCodeDraft(m.codingQuestion.starter);
-  }, [m.codingTurn, m.codingQuestion.starter]);
+    if (m.codingTurn) setCodeDraft(codingQ.starter);
+  }, [m.codingTurn, codingQ.starter]);
 
   // Leaving mid-interview loses the answer in progress — warn (UX spec).
   useEffect(() => {
@@ -178,6 +199,7 @@ function InterviewRoom() {
       {live && (
         <Live
           m={m}
+          codingQ={codingQ}
           textDraft={textDraft}
           setTextDraft={setTextDraft}
           codeDraft={codeDraft}
@@ -365,12 +387,14 @@ function Preroll({ m }: { m: M }) {
 
 function Live({
   m,
+  codingQ,
   textDraft,
   setTextDraft,
   codeDraft,
   setCodeDraft,
 }: {
   m: M;
+  codingQ: CodingQuestion;
   textDraft: string;
   setTextDraft: (s: string) => void;
   codeDraft: string;
@@ -423,11 +447,11 @@ function Live({
               }}
             >
               <span className="small" style={{ fontWeight: 600 }}>Hands-on question</span>
-              <span className="chip">{m.codingQuestion.language}</span>
+              <span className="chip">{LANG_LABEL[codingQ.language]}</span>
             </div>
             <MonacoEditor
               height="320px"
-              language={m.codingQuestion.language}
+              language={codingQ.language}
               theme="vs"
               value={codeDraft}
               onChange={(v) => setCodeDraft(v ?? "")}
