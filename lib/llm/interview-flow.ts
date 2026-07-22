@@ -1,8 +1,15 @@
-import type { HistoryEntry, InterviewerTurn, RolePreset } from "@/lib/types";
-import { GREETING, HR_QUESTIONS, WRAPUP, type HrQuestion } from "@/lib/fixtures/hr-questions";
+import type { CodeLanguage, HistoryEntry, InterviewerTurn, ResumeProfile, RolePreset } from "@/lib/types";
+import {
+  EXPERIENCED_HR_QUESTIONS,
+  FRESHER_HR_QUESTIONS,
+  GREETING,
+  HR_QUESTIONS,
+  WRAPUP,
+  type HrQuestion,
+} from "@/lib/fixtures/hr-questions";
 import {
   CODING_INTRO,
-  CODING_QUESTIONS,
+  codingQuestionFor,
   TECH_GREETING,
   TECH_WRAPUP,
   technicalBank,
@@ -31,15 +38,37 @@ function seededPick(pool: HrQuestion[], seedStr: string, count: number): HrQuest
   return picked;
 }
 
+/** Up to 2 project-dive questions generated from the profile. Deterministic
+ * from the profile alone — the SAME text on every call, because readPosition
+ * recognizes past turns by exact-text findIndex over effectiveQuestions. */
+export function projectDiveQuestions(profile: ResumeProfile): FlowQuestion[] {
+  return profile.projects.slice(0, 2).map((p, i) => ({
+    id: 400 + i,
+    text: `Walk me through ${p.name} — what was the hardest part?`,
+    followup: `If you rebuilt ${p.name} from scratch today, what would you do differently?`,
+    expectKeywords: ["built", "problem", "because", "learned", "designed"],
+  }));
+}
+
 export function effectiveQuestions(
   candidateName: string,
   roundType: "hr" | "technical",
   role: RolePreset,
+  profile?: ResumeProfile,
+  codeLanguage?: CodeLanguage,
 ): FlowQuestion[] {
   const seed = candidateName || "candidate";
-  if (roundType === "hr") return seededPick(HR_QUESTIONS, seed, QUESTIONS_PER_INTERVIEW);
-  const picked = seededPick(technicalBank(role), seed, QUESTIONS_PER_INTERVIEW - 1);
-  const codingQ = CODING_QUESTIONS[role];
+  const dives = profile ? projectDiveQuestions(profile) : [];
+  if (roundType === "hr") {
+    // Profile selects the real-HR canon bank (fresher vs experienced track).
+    const bank = profile ? (profile.experienced ? EXPERIENCED_HR_QUESTIONS : FRESHER_HR_QUESTIONS) : HR_QUESTIONS;
+    const picked = seededPick(bank, seed, QUESTIONS_PER_INTERVIEW - dives.length);
+    if (dives.length === 0) return picked;
+    // Dives land at slots 2-3: a bank opener first, then dig into their work.
+    return [picked[0], ...dives, ...picked.slice(1)];
+  }
+  const picked = seededPick(technicalBank(role), seed, QUESTIONS_PER_INTERVIEW - 1 - dives.length);
+  const codingQ = codingQuestionFor(role, codeLanguage);
   const codingEntry: FlowQuestion = {
     id: codingQ.id,
     text: `${CODING_INTRO} ${codingQ.text}`,
@@ -47,9 +76,55 @@ export function effectiveQuestions(
     expectKeywords: [],
     coding: true,
   };
-  const out = [...picked];
+  // Technical: project dives open the round (the greeting points at them).
+  const out = [...dives, ...picked];
   out.splice(CODING_QUESTION_SLOT - 1, 0, codingEntry);
   return out;
+}
+
+// ——— deterministic resume-aware greeting (single source — claude-cli
+// delegates here via computeNextTurn; instant, code-not-model) ———
+
+function spokenFirstName(name: string): string {
+  const first = name.trim().split(/\s+/)[0] || "there";
+  // ALL-CAPS resume banners read badly aloud — title-case them.
+  return /^[A-Z]{2,}$/.test(first) ? first[0] + first.slice(1).toLowerCase() : first;
+}
+
+/** Highlight line → something speakable mid-sentence: bullets and trailing
+ * punctuation dropped, first letter lowered unless it starts an acronym. */
+function speakableHighlight(h: string): string {
+  let s = h.replace(/^\s*(?:[-•*·◦▪‣→]|\d+[.)])\s*/, "").replace(/[.;:]+$/, "").trim();
+  if (s.length > 80) s = s.slice(0, 80).replace(/\s+\S*$/, "");
+  if (/^[A-Z][a-z]/.test(s)) s = s[0].toLowerCase() + s.slice(1);
+  return s;
+}
+
+function complimentFrom(profile: ResumeProfile): string {
+  if (profile.highlight) return `${speakableHighlight(profile.highlight)} — that genuinely caught my eye`;
+  if (profile.projects.length) return `${profile.projects[0].name} caught my eye`;
+  if (profile.skills.length) return `the ${profile.skills.slice(0, 2).join(" and ")} work caught my eye`;
+  return `it reads well`;
+}
+
+function experiencedLead(profile: ResumeProfile): string {
+  const company = profile.companies[0]; // resumes list most recent first
+  const years = profile.yearsOfExperience;
+  if (years && company) return `So, ${years} ${years === 1 ? "year" : "years"} at ${company} — let's start there.`;
+  if (company) return `So, your time at ${company} — let's start there.`;
+  if (years) return `So, ${years} ${years === 1 ? "year" : "years"} of experience — let's start there.`;
+  return `So, let's start with your experience.`;
+}
+
+/** "Hi {name} — I went through your resume, and {compliment}. {lead}" —
+ * two sentences max, speakable, composed from the profile in code so the
+ * session opens instantly with zero model latency. */
+export function composeResumeGreeting(candidateName: string, profile: ResumeProfile): string {
+  const first = spokenFirstName(profile.name ?? candidateName);
+  const lead = profile.experienced
+    ? experiencedLead(profile)
+    : "Let's start with the project that taught you the most.";
+  return `Hi ${first} — I went through your resume, and ${complimentFrom(profile)}. ${lead}`;
 }
 
 /** Max follow-ups per question in the scripted fallback: the fixture's canned
@@ -139,14 +214,19 @@ export function computeNextTurn(
   history: HistoryEntry[],
   roundType: "hr" | "technical" = "hr",
   role: RolePreset = "general",
+  profile?: ResumeProfile,
+  codeLanguage?: CodeLanguage,
 ): InterviewerTurn {
-  const questions = effectiveQuestions(candidateName, roundType, role);
+  // Callers must pass the SAME profile on every call of a session — the
+  // question set (banks + generated dives) derives from it deterministically.
+  const questions = effectiveQuestions(candidateName, roundType, role, profile, codeLanguage);
   const pos = readPosition(history, questions);
   const greet = roundType === "technical" ? TECH_GREETING : GREETING;
   const wrap = roundType === "technical" ? TECH_WRAPUP : WRAPUP;
 
   if (!pos.greeted) {
-    return { type: "greeting", text: greet(candidateName || "there"), questionIndex: 0, done: false };
+    const text = profile ? composeResumeGreeting(candidateName, profile) : greet(candidateName || "there");
+    return { type: "greeting", text, questionIndex: 0, done: false };
   }
 
   const lastCandidate = [...history].reverse().find((h) => h.speaker === "candidate");

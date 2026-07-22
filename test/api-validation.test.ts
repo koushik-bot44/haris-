@@ -48,4 +48,51 @@ describe("interview request validation (proxy hardening)", () => {
     expect(interviewRequestSchema.safeParse({ ...valid, candidateName: "  " }).success).toBe(false);
     expect(interviewRequestSchema.safeParse({ ...valid, candidateName: "x".repeat(61) }).success).toBe(false);
   });
+
+  it("accepts an optional resume profile and codeLanguage", () => {
+    const profile = {
+      name: "Rahul Verma",
+      experienced: true,
+      yearsOfExperience: 3,
+      companies: ["Infosys"],
+      skills: ["Java", "DSA"],
+      projects: [{ name: "Payment Engine", summary: "Cut mismatches by 40%" }],
+      education: "B.Tech",
+      highlight: "Cut mismatches by 40%",
+    };
+    const parsed = interviewRequestSchema.safeParse({ ...valid, profile, codeLanguage: "java" });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.profile?.experienced).toBe(true);
+      expect(parsed.data.codeLanguage).toBe("java");
+    }
+  });
+
+  it("rejects unknown code languages (enum, not free text)", () => {
+    expect(interviewRequestSchema.safeParse({ ...valid, codeLanguage: "ruby" }).success).toBe(false);
+  });
+
+  it("requires the experienced flag inside a profile", () => {
+    const profile = { companies: [], skills: [], projects: [] };
+    expect(interviewRequestSchema.safeParse({ ...valid, profile }).success).toBe(false);
+  });
+
+  it("caps profile arrays: skills ≤12, companies ≤6, projects ≤4", () => {
+    const base = { experienced: false, companies: [], skills: [], projects: [] };
+    const skills = Array.from({ length: 13 }, (_, i) => `skill${i}`);
+    expect(interviewRequestSchema.safeParse({ ...valid, profile: { ...base, skills } }).success).toBe(false);
+    const companies = Array.from({ length: 7 }, (_, i) => `co${i}`);
+    expect(interviewRequestSchema.safeParse({ ...valid, profile: { ...base, companies } }).success).toBe(false);
+    const projects = Array.from({ length: 5 }, (_, i) => ({ name: `p${i}`, summary: "s" }));
+    expect(interviewRequestSchema.safeParse({ ...valid, profile: { ...base, projects } }).success).toBe(false);
+  });
+
+  it("caps profile string lengths: strings ≤200, project summaries ≤300", () => {
+    const base = { experienced: false, companies: [], skills: [], projects: [] };
+    expect(interviewRequestSchema.safeParse({ ...valid, profile: { ...base, name: "x".repeat(201) } }).success).toBe(false);
+    const projects = [{ name: "p", summary: "x".repeat(301) }];
+    expect(interviewRequestSchema.safeParse({ ...valid, profile: { ...base, projects } }).success).toBe(false);
+    const okProjects = [{ name: "p", summary: "x".repeat(300) }];
+    expect(interviewRequestSchema.safeParse({ ...valid, profile: { ...base, projects: okProjects } }).success).toBe(true);
+  });
 });

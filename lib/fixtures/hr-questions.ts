@@ -74,6 +74,127 @@ export const HR_QUESTIONS: HrQuestion[] = [
   },
 ];
 
+// ——— Real-HR canon banks (resume-profile aware) ———
+// The questions every placement-interview video runs on, split on
+// ResumeProfile.experienced. The scripted fallback draws from these verbatim —
+// readPosition attributes turns by exact text, so every string below must stay
+// unique across ALL banks and DEEP_PROBES. HR_QUESTIONS above remains the
+// no-resume default.
+
+export const FRESHER_HR_QUESTIONS: HrQuestion[] = [
+  {
+    id: 201,
+    text: "Tell me about yourself — a quick introduction in your own words.",
+    followup: "That was mostly academics. Tell me one thing about you that isn't written on the resume.",
+    expectKeywords: ["project", "learn", "team"],
+  },
+  {
+    id: 202,
+    text: "What would you say is your biggest strength — and which of your projects actually proves it?",
+    followup: "Anyone can claim that. In that project, what exactly did the strength change?",
+    expectKeywords: ["project", "built", "example"],
+  },
+  {
+    id: 203,
+    text: "Why do you want to join our company, out of everyone hiring this season?",
+    followup: "That answer fits any company. Give me one reason that's specific to us.",
+    expectKeywords: ["company", "culture", "product", "because"],
+  },
+  {
+    id: 204,
+    text: "Are you open to relocating if the role needs it? Be honest with me.",
+    followup: "What would genuinely make relocation hard for you, and how would you handle it?",
+    expectKeywords: ["yes", "family", "move"],
+  },
+  {
+    id: 205,
+    text: "As a fresher, what are your expectations on the package? I'll only ask this once.",
+    followup: "Fair enough. And if our offer comes in a little below that number, what happens?",
+    expectKeywords: ["standard", "open", "learn", "growth"],
+  },
+  {
+    id: 206,
+    text: "Where do you see yourself three to five years from now?",
+    followup: "And what are you doing in the next six months to actually get there?",
+    expectKeywords: ["grow", "learn", "lead"],
+  },
+  {
+    id: 207,
+    text: "Tell me about a time your team disagreed with you. What did you do?",
+    followup: "What did YOU personally change after that disagreement?",
+    expectKeywords: ["listen", "talked", "agreed", "i "],
+  },
+  {
+    id: 208,
+    text: "Why should we pick you over the other freshers interviewing today?",
+    followup: "Everyone here works hard. What's one thing you've built that most of them haven't?",
+    expectKeywords: ["project", "built", "because"],
+  },
+  {
+    id: 209,
+    text: "What do you do when you're stuck on something you've never seen before?",
+    followup: "Tell me about the last time that actually happened. What did you try first?",
+    expectKeywords: ["search", "ask", "docs", "tried"],
+  },
+];
+
+export const EXPERIENCED_HR_QUESTIONS: HrQuestion[] = [
+  {
+    id: 301,
+    text: "So, why are you looking to leave your current company?",
+    followup: "Would your current manager be surprised to hear you're interviewing today?",
+    expectKeywords: ["growth", "learn", "role", "because"],
+  },
+  {
+    id: 302,
+    text: "Walk me through why you changed companies when you did — what drove each move?",
+    followup: "If the same reason shows up here in a year, do you move again?",
+    expectKeywords: ["growth", "opportunity", "role", "team"],
+  },
+  {
+    id: 303,
+    text: "Let's talk numbers — what is your current CTC, and what are you expecting from us?",
+    followup: "That was a vague range. I need a real number, and how you justify it.",
+    expectKeywords: ["lakh", "lpa", "ctc", "current", "expect"],
+  },
+  {
+    id: 304,
+    text: "What's your notice period, and is there any flexibility in it?",
+    followup: "If we needed you a month earlier than that, what would you actually do?",
+    expectKeywords: ["days", "month", "negoti", "buyout"],
+  },
+  {
+    id: 305,
+    text: "Beyond the title, what do you expect this role to give you that your current one doesn't?",
+    followup: "And if that expectation isn't met in the first year — then what?",
+    expectKeywords: ["growth", "ownership", "learn", "scope"],
+  },
+  {
+    id: 306,
+    text: "Why should we hire you over an internal candidate who already knows our systems?",
+    followup: "That's what you bring. What will your ramp-up honestly cost us?",
+    expectKeywords: ["experience", "perspective", "built", "deliver"],
+  },
+  {
+    id: 307,
+    text: "Give me the two-minute version of your professional journey so far.",
+    followup: "Which single decision in that journey would you take back?",
+    expectKeywords: ["joined", "worked", "built", "moved"],
+  },
+  {
+    id: 308,
+    text: "What would your current manager say is the one thing you still need to work on?",
+    followup: "And what have you actually done about it in the last three months?",
+    expectKeywords: ["feedback", "improve", "working"],
+  },
+  {
+    id: 309,
+    text: "Where do you see yourself in five years — realistically, from where you are now?",
+    followup: "Does this role actually move you toward that, or is it a detour?",
+    expectKeywords: ["lead", "grow", "architect", "manage"],
+  },
+];
+
 /** Verbal acknowledgments — the latency mask. Spoken client-side the moment an
  * answer ends, before the provider responds. Real interviewers do this. */
 export const VERBAL_ACKS = [

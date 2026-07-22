@@ -131,11 +131,33 @@ export interface HistoryEntry {
   text: string;
 }
 
+/** Extracted client-side from the resume text (deterministic, instant) so the
+ * interviewer knows the candidate before the first word — name, experience
+ * level, skills, and projects drive greeting, question choice, and HR style. */
+export interface ResumeProfile {
+  name?: string;
+  /** true = has real work experience; flips HR to why-change/package/notice questions. */
+  experienced: boolean;
+  yearsOfExperience?: number;
+  companies: string[];
+  skills: string[];
+  projects: { name: string; summary: string }[];
+  education?: string;
+  /** One specific resume line worth a genuine opening compliment. */
+  highlight?: string;
+}
+
+export type CodeLanguage = "java" | "python" | "cpp" | "javascript" | "c";
+
 export interface InterviewRequest {
   role: RolePreset;
   roundType: "hr" | "technical";
   candidateName: string;
   resume?: string;
+  /** Present when a resume was provided — every question should anchor to it. */
+  profile?: ResumeProfile;
+  /** Candidate's chosen coding-round language (technical round). */
+  codeLanguage?: CodeLanguage;
   history: HistoryEntry[];
 }
 

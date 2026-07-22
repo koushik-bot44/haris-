@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { clampTurn, deriveProgress, HARD_STOP_ANSWERS, parseInterviewerJson, transcriptFor } from "@/lib/llm/parse";
+import {
+  clampTurn,
+  deriveProgress,
+  HARD_STOP_ANSWERS,
+  parseInterviewerJson,
+  parseStreamedTurn,
+  transcriptFor,
+  visibleStreamText,
+} from "@/lib/llm/parse";
 import type { HistoryEntry } from "@/lib/types";
 
 describe("interviewer JSON parsing (LLM provider hardening)", () => {
@@ -44,6 +52,83 @@ describe("interviewer JSON parsing (LLM provider hardening)", () => {
     const turn = clampTurn({ type: "followup", text: "Go deeper…", questionIndex: 5, done: false }, deriveProgress(history));
     expect(turn.done).toBe(false);
     expect(turn.type).toBe("followup");
+  });
+});
+
+describe("parseStreamedTurn (spoken text + @@CTRL protocol)", () => {
+  it("parses text lines followed by a control line", () => {
+    const raw = 'Good point about indexing.\nHow would you shard that table?\n@@CTRL {"type":"followup","questionIndex":3,"done":false,"coding":false}';
+    expect(parseStreamedTurn(raw)).toEqual({
+      type: "followup",
+      text: "Good point about indexing.\nHow would you shard that table?",
+      questionIndex: 3,
+      done: false,
+    });
+  });
+
+  it("carries coding:true through; drops coding:false entirely", () => {
+    const coding = parseStreamedTurn('Open the editor.\n@@CTRL {"type":"question","questionIndex":3,"done":false,"coding":true}');
+    expect(coding?.coding).toBe(true);
+    const spoken = parseStreamedTurn('Tell me more.\n@@CTRL {"type":"question","questionIndex":2,"done":false,"coding":false}');
+    expect(spoken && "coding" in spoken).toBe(false);
+  });
+
+  it("missing @@CTRL: the whole reply becomes question text with index 0", () => {
+    const t = parseStreamedTurn("So tell me, why did you pick MongoDB over Postgres there?");
+    expect(t).toEqual({
+      type: "question",
+      text: "So tell me, why did you pick MongoDB over Postgres there?",
+      questionIndex: 0,
+      done: false,
+    });
+  });
+
+  it("junk control fields degrade to catch defaults instead of losing the turn", () => {
+    const t = parseStreamedTurn('Interesting answer.\n@@CTRL {"type":"lecture","questionIndex":99,"done":"yes"}');
+    expect(t).toEqual({ type: "question", text: "Interesting answer.", questionIndex: 0, done: false });
+  });
+
+  it("unparseable control JSON keeps the speech with default control fields", () => {
+    const t = parseStreamedTurn("Nice work on that.\n@@CTRL not-even-json");
+    expect(t).toEqual({ type: "question", text: "Nice work on that.", questionIndex: 0, done: false });
+  });
+
+  it("@@CTRL mid-text is spoken content — only line-initial counts", () => {
+    const raw = 'I noticed @@CTRL appears in your code sample. Why?\n@@CTRL {"type":"question","questionIndex":4,"done":false}';
+    const t = parseStreamedTurn(raw);
+    expect(t?.text).toBe("I noticed @@CTRL appears in your code sample. Why?");
+    expect(t?.questionIndex).toBe(4);
+  });
+
+  it("returns null on empty input and on a control line with no speech", () => {
+    expect(parseStreamedTurn("")).toBeNull();
+    expect(parseStreamedTurn("   \n ")).toBeNull();
+    expect(parseStreamedTurn('@@CTRL {"type":"question","questionIndex":1,"done":false}')).toBeNull();
+  });
+
+  it("parses a done wrapup", () => {
+    const t = parseStreamedTurn('Thanks, that was a strong round.\n@@CTRL {"type":"wrapup","questionIndex":0,"done":true}');
+    expect(t?.type).toBe("wrapup");
+    expect(t?.done).toBe(true);
+  });
+});
+
+describe("visibleStreamText (streaming withhold rules)", () => {
+  it("passes plain accumulated text through, trimmed", () => {
+    expect(visibleStreamText("Good point.\nNow tell me ")).toBe("Good point.\nNow tell me");
+  });
+
+  it("cuts at a line-initial @@CTRL even while the control JSON is partial", () => {
+    expect(visibleStreamText('Good point.\n@@CTRL {"type":"que')).toBe("Good point.");
+  });
+
+  it("withholds a trailing partial @@CTRL prefix until disambiguated", () => {
+    expect(visibleStreamText("Good point.\n@@C")).toBe("Good point.");
+    expect(visibleStreamText("Good point.\n@")).toBe("Good point.");
+  });
+
+  it("keeps mid-line @@CTRL mentions — they are spoken content", () => {
+    expect(visibleStreamText("I saw @@CTRL in your code")).toBe("I saw @@CTRL in your code");
   });
 });
 
