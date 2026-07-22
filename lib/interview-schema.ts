@@ -24,5 +24,6 @@ export const interviewRequestSchema = z.object({
         text: z.string().max(6000), // coding answers are longer than spoken ones
       }),
     )
-    .max(30),
+    // Deep-dive rounds run to HARD_STOP_ANSWERS=16 answers ≈ 33+ entries.
+    .max(48),
 });

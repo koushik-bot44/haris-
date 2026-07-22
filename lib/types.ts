@@ -11,6 +11,9 @@ export interface Turn {
   text: string;
   tStart: number; // epoch ms
   tEnd: number;
+  /** GD rounds: which AI persona spoke (absent on 1:1 turns and candidate turns). */
+  personaId?: string;
+  personaName?: string;
 }
 
 // Rubric contract (scoring lands in M1 weekend 2 — the shape is already pinned).
@@ -49,6 +52,64 @@ export interface Session {
   metricsVersion: 1;
   latency: { perTurnMs: number[]; avgMs: number | null };
   overall: { avgScore: number | null; summary: string };
+  /** GD sessions only. Optional so stored v1 payloads keep parsing. */
+  gdMetrics?: GdMetrics;
+  /** GD sessions: the discussion topic. */
+  topic?: string;
+  /** Append-only — originals never mutated (reserved for the retry feature). */
+  retries?: RetryEntry[];
+}
+
+export interface RetryEntry {
+  questionId: number;
+  answerTranscript: string;
+  scores: RubricScores;
+  at: number;
+}
+
+// ——— Group Discussion (GD) contracts ———
+
+export interface GdPersona {
+  id: string;
+  name: string;
+  /** One-line behavioral style fed to the LLM ("interrupts, speaks in absolutes"). */
+  style: string;
+  /** Chatterbox voice file (e.g. "Axel.wav"); falls back per lib/voices.ts. */
+  voice: string;
+  /** Orb hue triple for this persona's visual identity. */
+  hue: [number, number, number];
+}
+
+export interface GdInterjection {
+  tMs: number; // ms since discussion start
+  builtOnPrevious: boolean;
+}
+
+export interface GdMetrics {
+  airtimeSharePct: number; // candidate share of total speaking time
+  interjections: GdInterjection[];
+  candidateTurns: number;
+  candidateAirtimeMs: number;
+  personaAirtimeMs: Record<string, number>;
+}
+
+/** personaId "candidate" = the student; anything else = an AI persona id. */
+export interface GdHistoryEntry {
+  personaId: string;
+  text: string;
+}
+
+export interface GdTurn {
+  personaId: string;
+  text: string;
+}
+
+export interface GdRequest {
+  topic: string;
+  candidateName: string;
+  history: GdHistoryEntry[];
+  /** How many persona turns to return in one batch (call-budget control). */
+  wantTurns: number;
 }
 
 // ——— Interviewer protocol (client ⇄ /api/interview ⇄ provider) ———
