@@ -1,85 +1,161 @@
 # Placement Day Simulator
 
-Voice-first mock interviews for campus placements. You speak, an AI interviewer
-listens, asks adaptive follow-ups, and (from weekend 2) hands you an
-evidence-quoted scorecard with hard delivery metrics.
+A voice-first, AI-powered interview preparation and placement assistant, built
+with Generative AI. You speak, an AI interviewer listens, reads your resume,
+probes each topic until you tap out, and hands you an evidence-quoted scorecard
+with real delivery metrics. HR round, technical round with a live coding editor,
+and a Group Discussion room where three AI candidates debate you for airtime.
 
-Final-year major project. The full reviewed plan lives in
-`~/Documents/Hari's Project/Placement-Day-Simulator-Plan.pdf`.
+Final-year major project. Runs entirely on your own machine.
 
-## Run it
+---
+
+## Quick start (for teammates cloning this repo)
+
+You need **Node.js 18 or newer** and **Google Chrome** (voice input uses Chrome's
+speech API). Check with `node --version`.
 
 ```bash
+# 1. Install dependencies (one time, ~1 minute)
 npm install
-npm run dev        # http://localhost:3000 — use Chrome (voice needs its speech API)
-npm test           # unit tests: STT reducer, metrics, interview flow, API validation
+
+# 2. Start the app
+npm run dev
+
+# 3. Open it in Chrome
+#    http://localhost:3000
 ```
 
-No API key needed. Two brains, picked via `LLM_PROVIDER` (see `.env.example`):
+That's it — the app runs with **no API key and no setup**. Out of the box you get
+the full interface, scripted interview questions, on-device voice, and a working
+scorecard. To unlock the *adaptive* AI interviewer (questions generated live from
+your answers), add a free Groq key — see **"Make it smart"** below.
 
-- **`claude-cli`** (dev default via `.env.local`) — your authenticated Claude
-  Code CLI runs the interviewer on the quickest model (haiku): a real,
-  unscripted HR conversation that reacts to what you actually said. ~3–5s per
-  reply (masked by the verbal ack); local machine only. Any CLI failure falls
-  back to the scripted flow mid-interview — the round never dies.
-- **`mock`** — scripted question bank, realistic latency, simulated failures
-  (`LLM_MOCK_CHAOS=0` disables them). Used in CI and as the rescue path.
+> **Sharing with your team:** each person clones the repo and runs
+> `npm install && npm run dev` on their own laptop. Everyone gets their own
+> `http://localhost:3000`. No server, no deploy, no shared account needed.
 
-When a Gemini key exists: `LLM_PROVIDER=gemini` + the key in env — `lib/llm/`
-is the only place that changes.
+---
+
+## Make it smart (free, ~2 minutes) — optional but recommended
+
+Without a key, the interviewer asks good scripted questions. With a free **Groq**
+key, it becomes a real adaptive interviewer: it reads your resume, reacts to your
+exact words, drills deeper, and replies in under a second.
+
+1. Get a free key at **https://console.groq.com** → *API Keys* → *Create key*.
+2. Create a file named `.env.local` in the project root (copy `.env.example`):
+
+   ```bash
+   cp .env.example .env.local
+   ```
+
+3. Open `.env.local` and set:
+
+   ```
+   LLM_PROVIDER=groq
+   GROQ_API_KEY=gsk_your_key_here
+   GROQ_MODEL=llama-3.3-70b-versatile
+   ```
+
+4. Restart the app (`Ctrl-C`, then `npm run dev` again).
+
+> `.env.local` is **git-ignored** — your key never gets committed or shared.
+> Each teammate uses their own free Groq key (the free tier is generous).
+
+**Model choice:** `llama-3.3-70b-versatile` (default, best quality) or
+`llama-3.1-8b-instant` (fastest, ~0.25s replies).
+
+---
 
 ## Voices (pick on the setup screen)
 
-- **System** — instant, robotic. The floor.
-- **Kokoro (premium on-device)** — natural neural voice in the browser, free
-  forever, ~80MB one-time download.
-- **Chatterbox (studio, local)** — Resemble AI's MIT model (beat ElevenLabs
-  63–65% in blind tests) served from `~/chatterbox-tts-server` on Apple MPS.
-  Start it with `~/chatterbox-tts-server/run.sh`; the picker lights up when
-  it's running. **Voice cloning:** open http://localhost:8004, upload a 5–10s
-  clip, set `CHATTERBOX_VOICE` in `.env.local` to that file name.
-- **ElevenLabs (cloud)** — needs `ELEVENLABS_API_KEY` (free signup tier).
+The app never goes silent — it picks the best available voice and falls back
+automatically:
 
-Speech input auto-selects: Chrome's recognizer when reachable, on-device
-Whisper (~40MB, any browser, offline) otherwise.
+- **On-device (Kokoro)** — natural neural voice, runs in the browser, free
+  forever, ~80MB one-time download. **This is what teammates get by default.**
+- **System** — instant, robotic. The always-available floor.
+- **Studio (Chatterbox, local, optional)** — a studio-grade neural voice that
+  runs on your own machine (Apple Silicon / NVIDIA GPU). Only needed if you want
+  the premium voice or voice cloning. Set up separately (see below).
+- **Cloud (ElevenLabs, optional)** — add `ELEVENLABS_API_KEY` to `.env.local`.
 
-## What works today (v1.0.0.0 — the complete product)
+Speech **input** auto-selects: Chrome's recognizer when available, on-device
+Whisper (~40MB, works in any browser, offline) otherwise.
 
-- Every placement round: deep-dive HR and technical interviews (voice + text,
-  Monaco coding pane), and the Group Discussion room — three AI candidates
-  with distinct voices you fight for airtime, moderated and scored.
-- A real interviewer: opens from your resume, probes each topic until you tap
-  out, calls out rehearsed answers, nudges you when you stall, and can be
-  interrupted mid-sentence. Replies are speculatively pre-generated while you
-  speak, so they land near-instantly on the happy path.
-- Studio voice: Chatterbox (Elena by default; pick Gianna/Adrian/Olivia on the
-  setup screen) streamed sentence-by-sentence, falling back to on-device
-  Kokoro, then the system voice — the room never goes silent.
-- Evidence-based scoring: per-question rubric with quotes verifiably present
-  in your transcript, delivery metrics, and a full report + replay timeline
-  at /report/[id]; dashboard, history, and progress read the same data.
-- Career guidance (/guidance): learning path, certifications, skill gaps, and
-  role + company recommendations from your resume and scored rounds.
-- PDF resume upload with in-browser extraction (the file never leaves your
-  device) + ATS readiness score; guests never upload anything — sign-in and
-  MongoDB persistence are optional and env-gated.
+### Studio voice setup (optional, advanced)
 
-## Later (see TODOS.md)
-
-Rubric scoring, report page hierarchy, rate limiting + deploy (weekend 2) ·
-GD spike (August, weekends 3–4) · technical round + resume context (M2) ·
-auth + dashboard (M3) · GD room / replay (M4–M5).
-
-## Layout
+The premium "Elena" studio voice comes from a local Chatterbox TTS server. It's
+optional — teammates without it get the on-device Kokoro voice, which is still
+good. To run it, install [Chatterbox-TTS-Server](https://github.com/devnen/Chatterbox-TTS-Server),
+start it on port 8004, and add to `.env.local`:
 
 ```
-app/                 pages + /api/interview (zod-hardened, provider-backed)
-lib/stt-reducer.ts   restart/degrade policy — pure, tested with scripted events
-lib/stt.ts           thin browser adapter around the reducer
-lib/tts.ts           speechSynthesis: voices race, sentence chunking
-lib/metrics.ts       delivery metrics from the event trace
-lib/llm/             provider abstraction (mock today, gemini later)
-lib/fixtures/        curated HR question bank + persona lines
-hooks/               useInterviewMachine — the room's state machine
+CHATTERBOX_URL=http://127.0.0.1:8004
+CHATTERBOX_VOICE=Elena.wav
+```
+
+The voice picker on the setup screen lights up when the server is running.
+
+---
+
+## Tips for a good session
+
+- **Use headphones** if you can — it stops the AI's own voice from being picked
+  up by your microphone. (The app filters most echo, but headphones are cleaner.)
+- Allow microphone access when Chrome asks. If you deny it or your mic fails, the
+  app switches to **text mode** automatically — the interview still works.
+- Paste or upload your resume on the setup screen for personalized questions.
+- Technical round = DSA + coding questions, with a real code editor at question 3
+  in the language you pick (Java, Python, C++, JavaScript, or C).
+
+---
+
+## What's inside (all 10 department modules + more)
+
+- **HR & Technical interviews** (voice + text) — adaptive, resume-anchored,
+  deep-dive questioning; technical round is DSA + a live coding editor.
+- **Group Discussion room** — three AI debater personas with distinct voices,
+  a moderator, barge-in, and airtime scoring. No other tool simulates this.
+- **AI resume analysis** — ATS readiness score, strengths, gaps, missing skills.
+- **Evidence-based scoring** — per-question rubric where every quote is verified
+  to actually appear in your transcript (a hallucination guard).
+- **Report + replay** — a scrubbing timeline of your whole interview.
+- **Dashboard, history, progress** — your scored rounds over time.
+- **Career guidance** — learning path, certifications, and job/company
+  recommendations built from your resume and performance.
+- **Login (optional)** — Google sign-in + MongoDB persistence are env-gated;
+  guests work fully in the browser with nothing uploaded.
+
+**The Generative AI:** an LLM generates every interview question, the scoring,
+the resume analysis, the guidance, and the debate; a neural TTS model generates
+the voice; Whisper generates the transcription. Every path has a deterministic
+fallback so a model outage never kills a session. See
+`docs/department-module-crosscheck.md`.
+
+---
+
+## Commands
+
+```bash
+npm run dev      # start the app at http://localhost:3000
+npm run build    # production build
+npm start        # run the production build
+npm test         # run the test suite (344 unit tests)
+```
+
+## Project layout
+
+```
+app/                 pages + API routes (/api/interview, /score, /gd, /tts, ...)
+hooks/               useInterviewMachine, useGdMachine — the room state machines
+lib/llm/             the AI brains: groq (production), claude-cli (dev), mock,
+                     plus scoring, resume analysis, guidance
+lib/resume-profile.ts  resume → skills/projects/experience (pure, instant)
+lib/stt*.ts          speech-to-text (Chrome + on-device Whisper), pure reducer
+lib/tts.ts           streaming voice playback + engine fallback chain
+lib/gd/              Group Discussion engine (personas, debate flow, airtime)
+lib/fixtures/        curated question banks (HR, DSA, coding in 5 languages)
 test/                vitest suites for everything above
 ```
