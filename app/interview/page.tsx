@@ -425,9 +425,11 @@ function Live({
           justifyContent: "center",
         }}
       >
-        {m.phase === "thinking" ? (
+        {m.phase === "thinking" && !m.caption ? (
           <span className="chip">{first} is thinking…</span>
         ) : (
+          // Display-first streaming: the reply types out here DURING thinking,
+          // the voice joins from the first finished sentence.
           <p style={captionStyle}>{m.caption}</p>
         )}
       </div>

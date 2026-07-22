@@ -93,7 +93,7 @@ export async function POST(req: Request) {
       // req.signal: a client abort/speculation cancel kills the request/subprocess.
       const raw = groqEnabled()
         ? await groqComplete(buildPrompt(data), { signal: req.signal, maxTokens: 600 })
-        : await runClaude(buildPrompt(data), undefined, undefined, req.signal);
+        : await runClaude(buildPrompt(data), 12_000, undefined, req.signal);
       const turns = parseGdTurns(raw, data.wantTurns);
       if (turns) return NextResponse.json({ turns, provider: groqEnabled() ? "groq" : "claude-cli" });
     } catch {

@@ -42,4 +42,20 @@ describe("barge-in decision", () => {
   it("empty heard text never interrupts", () => {
     expect(decideBargeIn({ heardText: "  ", spokenText: PRIYA, msSinceTtsStart: 5000 })).toBe("ignore");
   });
+
+  it("ignores a brief distinct phrase — raised bar so speaker echo can't cut her off", () => {
+    // Distinct from PRIYA (no echo), but too few words/chars to be a deliberate
+    // interruption; under the no-headphones tuning this must NOT interrupt.
+    expect(decideBargeIn({ heardText: "no wait stop", spokenText: PRIYA, msSinceTtsStart: 3000 })).toBe("ignore");
+  });
+
+  it("still respects the longer warm-up window", () => {
+    expect(
+      decideBargeIn({
+        heardText: "actually sorry can I answer the previous question differently",
+        spokenText: PRIYA,
+        msSinceTtsStart: 1300,
+      }),
+    ).toBe("ignore");
+  });
 });

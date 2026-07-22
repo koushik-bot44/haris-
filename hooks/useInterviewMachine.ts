@@ -557,7 +557,9 @@ export function useInterviewMachine(
 
   const speakAck = useCallback(() => {
     // Engine-native cached ack, or nothing — a robotic ack is worse than
-    // silence (the orb's thinking state carries the gap).
+    // silence (the orb's thinking state carries the gap). Cancel-before-assign:
+    // an overlapping ack (nudge still playing) is the two-voices bug.
+    ackRef.current?.cancel();
     ackRef.current = playAck();
   }, []);
 
@@ -615,15 +617,24 @@ export function useInterviewMachine(
       return;
     }
 
+    // Streamed-rescue consistency: if the final turn's text does not contain
+    // the sentence the voice pipeline already spoke (a rescue swapped the
+    // text), the audio is wrong — kill it and speak the real turn in full so
+    // voice, caption, history, and scoring always agree.
+    let liveSrc = live ?? null;
+    if (liveSrc && !turn.text.includes(liveSrc.spoken)) {
+      liveSrc.handle.cancel();
+      liveSrc = null;
+    }
     // SINGLE-VOICE INVARIANT: whatever is still speaking dies before the new
     // utterance starts — two interviewer voices at once is never acceptable,
     // no matter which orchestration path slipped.
-    if (speakRef.current && speakRef.current !== live?.handle) speakRef.current.cancel();
+    if (speakRef.current && speakRef.current !== liveSrc?.handle) speakRef.current.cancel();
     // One handle, three sources: a streamed turn chains the remainder after
     // its already-speaking first sentence (cancel covers both utterances);
     // prepared (speculative) audio schedules instantly; otherwise live speak().
-    const handle = live
-      ? chainSpeak(live.handle, remainderAfter(turn.text, live.spoken), { voice: voiceForRound(roundType) })
+    const handle = liveSrc
+      ? chainSpeak(liveSrc.handle, remainderAfter(turn.text, liveSrc.spoken), { voice: voiceForRound(roundType) })
       : prepared
         ? prepared.play()
         : speak(turn.text, { voice: voiceForRound(roundType) });
@@ -660,6 +671,9 @@ export function useInterviewMachine(
     // and listens like a real interviewer); a quieter early start is captured
     // and becomes the beginning of the answer instead of being lost.
     const promo = { promoted: false };
+    // Echo filter reference = the turn text PLUS every ack/nudge line the app
+    // itself speaks — self-audio must always be filtered, never an interrupt.
+    const echoRefText = `${turn.text} ${Object.values(ACK_TEXTS).flat().join(" ")}`;
     if (!textModeRef.current && !turn.done && !turn.coding) {
       const holder: { sess: SttSession | null } = { sess: null };
       holder.sess = startStt({
@@ -675,7 +689,7 @@ export function useInterviewMachine(
           if (
             holder.sess &&
             !endedRef.current &&
-            decideBargeIn({ heardText: heard, spokenText: turn.text, msSinceTtsStart: msSince }) === "interrupt"
+            decideBargeIn({ heardText: heard, spokenText: echoRefText, msSinceTtsStart: msSince }) === "interrupt"
           ) {
             promo.promoted = true;
             interruptSttRef.current = null;
@@ -823,6 +837,7 @@ export function useInterviewMachine(
   const callInterviewer = useCallback(async () => {
     if (endedRef.current) return;
     setPhase("thinking");
+    setCaption(""); // last turn's line must not linger while the next streams in
     setError(null);
     // Streaming-first. ANY streaming failure (error event, network, malformed)
     // falls back to exactly ONE non-stream POST — today's path below, which
@@ -1005,6 +1020,7 @@ export function useInterviewMachine(
       nudgeCountRef.current += 1;
       lastNudgeTRef.current = now;
       const kind: AckKind = action === "offer_rephrase" ? "rephrase" : "encourage";
+      ackRef.current?.cancel(); // never two acks at once
       const h = playAck(kind);
       ackRef.current = h;
       setCaption(h?.text ?? ACK_TEXTS[kind][0]);

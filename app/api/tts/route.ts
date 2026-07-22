@@ -99,7 +99,7 @@ async function speakChatterbox(text: string, voice: string | undefined, stream: 
         // interviewer turns (the whole first chunk must synthesize before play).
         chunk_size: 50,
       }),
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(20_000),
     });
     if (!res.ok || !res.body)
       return NextResponse.json({ error: "chatterbox_error", status: res.status }, { status: 502 });
@@ -118,7 +118,7 @@ async function speakChatterbox(text: string, voice: string | undefined, stream: 
       response_format: "wav",
       speed: 1.0,
     }),
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) return NextResponse.json({ error: "chatterbox_error", status: res.status }, { status: 502 });
   return new NextResponse(res.body, { headers: { "content-type": "audio/wav" } });
