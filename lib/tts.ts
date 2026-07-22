@@ -7,6 +7,7 @@
 //   downloaded; system speaks in the meantime. Selected via the setup toggle.
 
 import { ensureKokoroLoading, kokoroSpeak, kokoroStatus, PRIYA_VOICE } from "@/lib/tts-kokoro";
+import { startPseudoTalking, stopPseudoTalking, tapPlayback } from "@/lib/audio-viz";
 
 const ENGINE_KEY = "pds_voice_engine";
 
@@ -106,7 +107,7 @@ function serverSpeak(text: string, engine: "elevenlabs" | "chatterbox"): SpeakHa
       await new Promise<void>((resolve) => {
         const src = ctx.createBufferSource();
         src.buffer = audio;
-        src.connect(ctx.destination);
+        tapPlayback(ctx, src); // orb rides the real playback amplitude
         src.onended = () => resolve();
         source = src;
         resolveFirst(Date.now());
@@ -176,6 +177,7 @@ function systemSpeak(text: string, opts?: { rate?: number }): SpeakHandle {
           if (first) {
             first = false;
             resolveFirst(Date.now());
+            startPseudoTalking(); // no audio graph on speechSynthesis — shaped envelope
           }
         };
         u.onend = () => resolve();
@@ -183,6 +185,7 @@ function systemSpeak(text: string, opts?: { rate?: number }): SpeakHandle {
         window.speechSynthesis.speak(u);
       });
     }
+    stopPseudoTalking();
     if (first) resolveFirst(Date.now()); // nothing spoke (cancelled/empty) — don't hang awaiters
   })();
 
@@ -190,6 +193,7 @@ function systemSpeak(text: string, opts?: { rate?: number }): SpeakHandle {
     done,
     cancel() {
       cancelled = true;
+      stopPseudoTalking();
       window.speechSynthesis.cancel();
     },
     firstSyllableAt,

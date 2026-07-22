@@ -7,6 +7,8 @@
 // GD persona later. Hybrid rule: while the model is still downloading, the
 // system voice speaks; Kokoro takes over seamlessly once ready.
 
+import { tapPlayback } from "@/lib/audio-viz";
+
 type KokoroModel = {
   generate(text: string, opts: { voice: string }): Promise<{ audio: Float32Array; sampling_rate: number }>;
 };
@@ -73,7 +75,7 @@ export function kokoroSpeak(chunks: string[], voice: string): KokoroHandle {
       buf.copyToChannel(new Float32Array(audio), 0);
       const src = c.createBufferSource();
       src.buffer = buf;
-      src.connect(c.destination);
+      tapPlayback(c, src); // orb rides the real playback amplitude
       src.onended = () => resolve();
       currentSource = src;
       src.start();
