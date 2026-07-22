@@ -114,16 +114,29 @@ export interface GdRequest {
 
 // ——— Interviewer protocol (client ⇄ /api/interview ⇄ provider) ———
 
-export type InterviewerTurnType = "greeting" | "question" | "followup" | "wrapup";
+/** "reply" is the conversational act the interviewer had no way to express
+ * before: answering a question the candidate asked, reassuring them, correcting
+ * a wrong answer, or reacting to a joke — WITHOUT opening an interview topic.
+ * Its absence is what made the interviewer talk past people. */
+export type InterviewerTurnType = "greeting" | "reply" | "question" | "followup" | "wrapup";
 
 export interface InterviewerTurn {
   type: InterviewerTurnType;
   text: string;
-  /** 1-based index of the main question this turn belongs to; 0 for greeting/wrapup. */
+  /** 1-based index of the topic this turn belongs to; 0 for greeting, wrapup,
+   * and conversational replies that belong to no topic. Metadata for scoring —
+   * it must never drive what the interviewer says next. */
   questionIndex: number;
   done: boolean;
+  /** True only when this turn actually put a question to the candidate. A turn
+   * that just answers or reassures them does not consume interview progress. */
+  asked?: boolean;
   /** This question is answered in the code editor, not by voice (technical round). */
   coding?: boolean;
+  /** True when this turn came from the fixture bank instead of the model — the
+   * rescue path. Surfaced so a scripted-feeling interview can be diagnosed
+   * instead of guessed at. */
+  scripted?: boolean;
 }
 
 export interface HistoryEntry {

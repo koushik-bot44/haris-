@@ -34,7 +34,7 @@ import {
   type ListenSnapshot,
 } from "@/lib/conversation";
 import { voiceForRound } from "@/lib/voices";
-import { codingQuestionFor, TECH_PERSONA, type CodingQuestion } from "@/lib/fixtures/technical-questions";
+import { codingQuestionFor, codingSeedFrom, TECH_PERSONA, type CodingQuestion } from "@/lib/fixtures/technical-questions";
 import { setVizMode, startMicViz, stopMicViz } from "@/lib/audio-viz";
 
 export interface Persona {
@@ -607,7 +607,10 @@ export function useInterviewMachine(
     historyRef.current.push({ speaker: "interviewer", text: clampHistoryText(cleanText) });
     const tStart = Date.now();
     setCaption(cleanText);
-    setQuestionIndex(turn.questionIndex);
+    // A conversational turn — answering them, reassuring them, correcting them —
+    // carries questionIndex 0 and must NOT rewind the progress display. Only a
+    // turn that belongs to a topic moves it.
+    if (turn.questionIndex > 0) setQuestionIndex(turn.questionIndex);
     codingActiveRef.current = Boolean(turn.coding);
     setCodingTurn(Boolean(turn.coding));
     // Track which main question the next answer belongs to (scoring identity):
@@ -1100,7 +1103,13 @@ export function useInterviewMachine(
     sessionPersisted,
     codingTurn,
     // Spoken question, editor language, and starter all follow the chosen language.
-    codingQuestion: codingQuestionFor(role, extrasRef.current?.codeLanguage),
+    // Seeded identically to the server so the editor always shows the starter
+    // for the problem the interviewer actually spoke.
+    codingQuestion: codingQuestionFor(
+      role,
+      extrasRef.current?.codeLanguage,
+      codingSeedFrom(candidateName, historyRef.current),
+    ),
     persona: roundType === "technical" ? TECH_PERSONA : HR_PERSONA,
     degradePrefill,
     error,

@@ -205,9 +205,12 @@ export const VERBAL_ACKS = [
   "Right.",
 ];
 
+// No question count in the greeting: promising "five questions" primes the
+// candidate to experience a form, and the interview no longer runs on a fixed
+// count anyway — it goes where the conversation goes.
 export const GREETING = (name: string) =>
   `Hello ${name}, I'm Priya Sharma, HR at Meridian Corp. Thanks for joining today. ` +
-  `This will be a short round — five questions, about ten minutes. Take your time with each answer. Let's begin.`;
+  `This is just a conversation — around ten minutes. Ask me anything as we go. So, tell me a bit about yourself.`;
 
 export const WRAPUP = (name: string) =>
   `That concludes our round, ${name}. Thank you — you'll see your feedback in just a moment.`;

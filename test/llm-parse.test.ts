@@ -63,6 +63,19 @@ describe("parseStreamedTurn (spoken text + @@CTRL protocol)", () => {
       text: "Good point about indexing.\nHow would you shard that table?",
       questionIndex: 3,
       done: false,
+      // Omitted by the model, inferred from the act: a followup is a probe.
+      asked: true,
+    });
+  });
+
+  it("carries an explicit asked:false — a turn that only answers the candidate", () => {
+    const raw = 'I\'m Priya, HR here at Meridian.\n@@CTRL {"type":"reply","questionIndex":0,"asked":false,"done":false}';
+    expect(parseStreamedTurn(raw)).toEqual({
+      type: "reply",
+      text: "I'm Priya, HR here at Meridian.",
+      questionIndex: 0,
+      done: false,
+      asked: false,
     });
   });
 
@@ -73,31 +86,91 @@ describe("parseStreamedTurn (spoken text + @@CTRL protocol)", () => {
     expect(spoken && "coding" in spoken).toBe(false);
   });
 
-  it("missing @@CTRL: the whole reply becomes question text with index 0", () => {
+  // With no control line there is no claim that a topic was opened, so the turn
+  // degrades to conversation, not to interview progress. `asked` is inferred
+  // from the text so a real question still counts.
+  it("missing @@CTRL: the reply is conversational, and a question mark still counts as asking", () => {
     const t = parseStreamedTurn("So tell me, why did you pick MongoDB over Postgres there?");
     expect(t).toEqual({
-      type: "question",
+      type: "reply",
       text: "So tell me, why did you pick MongoDB over Postgres there?",
       questionIndex: 0,
       done: false,
+      asked: true,
     });
+  });
+
+  it("missing @@CTRL on a turn that asks nothing does not count as asking", () => {
+    const t = parseStreamedTurn("No rush at all — take your time.");
+    expect(t?.asked).toBe(false);
+    expect(t?.type).toBe("reply");
   });
 
   it("junk control fields degrade to catch defaults instead of losing the turn", () => {
     const t = parseStreamedTurn('Interesting answer.\n@@CTRL {"type":"lecture","questionIndex":99,"done":"yes"}');
-    expect(t).toEqual({ type: "question", text: "Interesting answer.", questionIndex: 0, done: false });
+    expect(t).toEqual({
+      type: "reply",
+      text: "Interesting answer.",
+      questionIndex: 0,
+      done: false,
+      asked: false,
+    });
   });
 
   it("unparseable control JSON keeps the speech with default control fields", () => {
     const t = parseStreamedTurn("Nice work on that.\n@@CTRL not-even-json");
-    expect(t).toEqual({ type: "question", text: "Nice work on that.", questionIndex: 0, done: false });
+    expect(t).toEqual({
+      type: "reply",
+      text: "Nice work on that.",
+      questionIndex: 0,
+      done: false,
+      asked: false,
+    });
   });
 
-  it("@@CTRL mid-text is spoken content — only line-initial counts", () => {
-    const raw = 'I noticed @@CTRL appears in your code sample. Why?\n@@CTRL {"type":"question","questionIndex":4,"done":false}';
+  // Observed live: the model answered, then emitted its control line as
+  // `@{"type":"reply","asking":false,"answered":true,"topic":0}`. The old
+  // parser only knew "@@CTRL", so the JSON was treated as speech — spoken by
+  // the TTS and printed in the caption mid-interview.
+  it("recognises an improvised control marker instead of speaking the JSON", () => {
+    const raw = 'Oh, nice to meet you, Koushik.\n@{"type":"reply","asking":false,"answered":true,"topic":0}';
     const t = parseStreamedTurn(raw);
-    expect(t?.text).toBe("I noticed @@CTRL appears in your code sample. Why?");
-    expect(t?.questionIndex).toBe(4);
+    expect(t?.text).toBe("Oh, nice to meet you, Koushik.");
+    expect(t?.text).not.toContain("{");
+    expect(t?.type).toBe("reply");
+    expect(t?.questionIndex).toBe(0);
+    expect(t?.asked).toBe(false);
+  });
+
+  it("maps the model's alias field names onto the real ones", () => {
+    const t = parseStreamedTurn('Tell me about that project.\n@@CTRL {"type":"question","topic":3,"asking":true}');
+    expect(t?.questionIndex).toBe(3);
+    expect(t?.asked).toBe(true);
+  });
+
+  it("never lets a bare control object reach the spoken text", () => {
+    const t = parseStreamedTurn('Good answer.\n{"type":"followup","questionIndex":2,"done":false}');
+    expect(t?.text).toBe("Good answer.");
+    expect(t?.questionIndex).toBe(2);
+  });
+
+  it("withholds a partial improvised marker while streaming", () => {
+    expect(visibleStreamText("Nice work on that.\n@{")).toBe("Nice work on that.");
+    expect(visibleStreamText('Nice work.\n@{"type":"rep')).toBe("Nice work.");
+  });
+
+  // Behaviour changed deliberately. The marker used to count only at the start
+  // of a line, so an inline one was spoken aloud — and models emit inline
+  // markers routinely (observed: `Hello Rohan, nice to finally dig in. @@CTRL
+  // {"type":"greeting",...}` on one line). Speaking JSON at a candidate is a
+  // far worse failure than truncating the rare turn that discusses the literal
+  // token, so the marker now ends the speech wherever it appears.
+  it("treats an inline @@CTRL as the end of speech, not as spoken content", () => {
+    const raw = 'Hello Rohan, nice to finally dig in. @@CTRL {"type":"greeting","questionIndex":0,"done":false}';
+    const t = parseStreamedTurn(raw);
+    expect(t?.text).toBe("Hello Rohan, nice to finally dig in.");
+    expect(t?.text).not.toContain("@@CTRL");
+    expect(t?.type).toBe("greeting");
   });
 
   it("returns null on empty input and on a control line with no speech", () => {
@@ -127,8 +200,10 @@ describe("visibleStreamText (streaming withhold rules)", () => {
     expect(visibleStreamText("Good point.\n@")).toBe("Good point.");
   });
 
-  it("keeps mid-line @@CTRL mentions — they are spoken content", () => {
-    expect(visibleStreamText("I saw @@CTRL in your code")).toBe("I saw @@CTRL in your code");
+  // Matches the parser: an inline marker ends the speech while streaming too,
+  // so the TTS never starts saying "at at C T R L" before the turn resolves.
+  it("cuts at an inline @@CTRL rather than streaming it to the voice", () => {
+    expect(visibleStreamText("I saw @@CTRL in your code")).toBe("I saw");
   });
 });
 

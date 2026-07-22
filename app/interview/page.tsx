@@ -68,9 +68,11 @@ function InterviewRoom() {
       return "java";
     }
   });
-  const codingQ = codingQuestionFor(role, codeLang);
-
   const m = useInterviewMachine(name, role, round, resume);
+  // The machine owns this: it seeds the pick from the same value the server
+  // uses, so the editor's starter always matches the problem that was spoken.
+  // Computing it here independently would drift the moment the pool grew.
+  const codingQ = m.codingQuestion;
   const [textDraft, setTextDraft] = useState("");
   const [codeDraft, setCodeDraft] = useState("");
   // Engine label is read after mount — localStorage is a client-only source.
@@ -146,7 +148,7 @@ function InterviewRoom() {
                 ))}
               </span>
               <span>
-                Question {m.questionIndex} of 5
+                Topic {m.questionIndex}
                 {m.codingTurn && <span className="muted"> · coding</span>}
               </span>
             </>
@@ -346,8 +348,9 @@ function Preroll({ m }: { m: M }) {
     <section className="card panel-enter">
       <h2>Before we start</h2>
       <p>
-        {first} will ask <strong>5 questions — about 10 minutes</strong>.
-        {m.persona.initials === "AR" && <> One of them is <strong>hands-on coding</strong> — an editor opens when it's time.</>}{" "}
+        A real conversation with {first} — <strong>about 10 minutes</strong>. They follow what you
+        say, so answers change where it goes, and you can ask them questions too.
+        {m.persona.initials === "AR" && <> There's <strong>hands-on coding</strong> in this one — an editor opens when it's time.</>}{" "}
         Answer out loud, take your time.
       </p>
       <p>

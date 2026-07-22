@@ -15,8 +15,8 @@ export const TECH_PERSONA = {
 };
 
 export const TECH_GREETING = (name: string) =>
-  `Hi ${name}, I'm Arjun Rao, tech lead at Meridian Corp. This round is technical — five questions, one of them hands-on coding. ` +
-  `Don't worry about perfect answers; I care how you think. Let's start.`;
+  `Hi ${name}, I'm Arjun Rao, tech lead at Meridian Corp. This round is technical, and there's some hands-on coding in it. ` +
+  `Don't worry about perfect answers; I care how you think, and you can ask me things too. Let's start.`;
 
 export const TECH_WRAPUP = (name: string) =>
   `Alright ${name}, that's the technical round done. Good effort — your detailed feedback is coming up now.`;
@@ -152,12 +152,102 @@ const ANAGRAM: Record<CodeLanguage, CodingQuestion> = {
   },
 };
 
+// ——— pair sum (id 903) ———
+
+const PAIR_SUM: Record<CodeLanguage, CodingQuestion> = {
+  java: {
+    id: 903,
+    text: "Write a Java method that finds two numbers in an array that add up to a target, and returns their indices. State the time complexity in a comment.",
+    starter:
+      "public class Solution {\n    // Return the indices of the two numbers adding to target.\n    // Decide and document what happens when there is no such pair.\n    // Example: pairSum(new int[]{2,7,11,15}, 9) -> [0, 1]\n    public static int[] pairSum(int[] nums, int target) {\n        // your code here\n        return new int[0];\n    }\n}\n",
+    language: "java",
+  },
+  python: {
+    id: 903,
+    text: "Write a Python function that finds two numbers in a list that add up to a target, and returns their indices. State the time complexity in a comment.",
+    starter:
+      "# Return the indices of the two numbers adding to target.\n# Decide and document what happens when there is no such pair.\n# Example: pair_sum([2, 7, 11, 15], 9) -> (0, 1)\ndef pair_sum(nums: list[int], target: int):\n    # your code here\n    return None\n",
+    language: "python",
+  },
+  cpp: {
+    id: 903,
+    text: "Write a C++ function that finds two numbers in a vector that add up to a target, and returns their indices. State the time complexity in a comment.",
+    starter:
+      "#include <vector>\n\n// Return the indices of the two numbers adding to target.\n// Decide and document what happens when there is no such pair.\n// Example: pairSum({2, 7, 11, 15}, 9) -> {0, 1}\nstd::vector<int> pairSum(const std::vector<int>& nums, int target) {\n    // your code here\n    return {};\n}\n",
+    language: "cpp",
+  },
+  javascript: {
+    id: 903,
+    text: "Write a JavaScript function that finds two numbers in an array that add up to a target, and returns their indices. State the time complexity in a comment.",
+    starter:
+      "// Return the indices of the two numbers adding to target.\n// Decide and document what happens when there is no such pair.\n// Example: pairSum([2, 7, 11, 15], 9) -> [0, 1]\nfunction pairSum(nums, target) {\n  // your code here\n  return [];\n}\n",
+    language: "javascript",
+  },
+  c: {
+    id: 903,
+    text: "Write a C function that finds two numbers in an array that add up to a target, writing their indices to out params. State the time complexity in a comment.",
+    starter:
+      "#include <stdbool.h>\n\n/* Write the indices of the two numbers adding to target into *i and *j.\n   Return false when there is no such pair.\n   Example: nums = {2,7,11,15}, target = 9 -> i=0, j=1 */\nbool pair_sum(const int *nums, int n, int target, int *i, int *j) {\n    /* your code here */\n    return false;\n}\n",
+    language: "c",
+  },
+};
+
+// ——— balanced brackets (id 904) ———
+
+const BALANCED_BRACKETS: Record<CodeLanguage, CodingQuestion> = {
+  java: {
+    id: 904,
+    text: "Write a Java method that checks whether a string of brackets is balanced — round, square and curly. State the time complexity in a comment.",
+    starter:
+      "public class Solution {\n    // Balanced means every opener has a matching closer, correctly nested.\n    // Example: isBalanced(\"{[()]}\") -> true, isBalanced(\"([)]\") -> false\n    public static boolean isBalanced(String s) {\n        // your code here\n        return false;\n    }\n}\n",
+    language: "java",
+  },
+  python: {
+    id: 904,
+    text: "Write a Python function that checks whether a string of brackets is balanced — round, square and curly. State the time complexity in a comment.",
+    starter:
+      "# Balanced means every opener has a matching closer, correctly nested.\n# Example: is_balanced(\"{[()]}\") -> True, is_balanced(\"([)]\") -> False\ndef is_balanced(s: str) -> bool:\n    # your code here\n    return False\n",
+    language: "python",
+  },
+  cpp: {
+    id: 904,
+    text: "Write a C++ function that checks whether a string of brackets is balanced — round, square and curly. State the time complexity in a comment.",
+    starter:
+      "#include <string>\n\n// Balanced means every opener has a matching closer, correctly nested.\n// Example: isBalanced(\"{[()]}\") -> true, isBalanced(\"([)]\") -> false\nbool isBalanced(const std::string& s) {\n    // your code here\n    return false;\n}\n",
+    language: "cpp",
+  },
+  javascript: {
+    id: 904,
+    text: "Write a JavaScript function that checks whether a string of brackets is balanced — round, square and curly. State the time complexity in a comment.",
+    starter:
+      "// Balanced means every opener has a matching closer, correctly nested.\n// Example: isBalanced(\"{[()]}\") -> true, isBalanced(\"([)]\") -> false\nfunction isBalanced(s) {\n  // your code here\n  return false;\n}\n",
+    language: "javascript",
+  },
+  c: {
+    id: 904,
+    text: "Write a C function that checks whether a string of brackets is balanced — round, square and curly. State the time complexity in a comment.",
+    starter:
+      "#include <stdbool.h>\n\n/* Balanced means every opener has a matching closer, correctly nested.\n   Example: is_balanced(\"{[()]}\") -> true, is_balanced(\"([)]\") -> false */\nbool is_balanced(const char *s) {\n    /* your code here */\n    return false;\n}\n",
+    language: "c",
+  },
+};
+
 /** Every role's exercise in every language — same problem per role (same id),
- * five idiomatic starters. */
+ * five idiomatic starters. Kept as the role's DEFAULT; the pool below is what
+ * a live interview actually draws from. */
 export const CODING_QUESTIONS_BY_LANG: Record<RolePreset, Record<CodeLanguage, CodingQuestion>> = {
   "java-sde-fresher": FIRST_NON_REPEATING,
   "frontend-fresher": DEBOUNCE,
   general: ANAGRAM,
+};
+
+/** The problems a role can draw. Before this there was exactly ONE exercise per
+ * role, so every candidate on `general` got the anagram question in every
+ * session, forever — the single most obviously canned moment in the product. */
+export const CODING_POOL: Record<RolePreset, Record<CodeLanguage, CodingQuestion>[]> = {
+  "java-sde-fresher": [FIRST_NON_REPEATING, PAIR_SUM, BALANCED_BRACKETS],
+  "frontend-fresher": [DEBOUNCE, PAIR_SUM, ANAGRAM],
+  general: [ANAGRAM, PAIR_SUM, BALANCED_BRACKETS],
 };
 
 // Compatibility shape: the hook and the scripted flow index by role only —
@@ -169,10 +259,55 @@ export const CODING_QUESTIONS: Record<RolePreset, CodingQuestion> = {
 };
 
 /** The role's exercise in the candidate's chosen language. Missing/junk lang
- * (e.g. stale sessionStorage) falls back to the role's existing default. */
-export function codingQuestionFor(role: RolePreset, lang?: CodeLanguage): CodingQuestion {
-  const table = CODING_QUESTIONS_BY_LANG[role] ?? CODING_QUESTIONS_BY_LANG.general;
-  return (lang && table[lang]) || CODING_QUESTIONS[role] || CODING_QUESTIONS.general;
+ * (e.g. stale sessionStorage) falls back to the role's existing default.
+ *
+ * `seed` picks WHICH problem from the role's pool. It has to be stable for the
+ * whole of one interview (the editor, the submitted code and the score all
+ * reference the same problem) but differ between interviews. There is no
+ * session id on the request — the API is stateless by design — so callers pass
+ * something already fixed by the time the coding round arrives, in practice the
+ * candidate's first answer. No seed keeps the historical default. */
+export function codingQuestionFor(
+  role: RolePreset,
+  lang?: CodeLanguage,
+  seed?: string,
+): CodingQuestion {
+  const pool = CODING_POOL[role] ?? CODING_POOL.general;
+  const table = seed
+    ? pool[hashIndex(seed, pool.length)]
+    : (CODING_QUESTIONS_BY_LANG[role] ?? CODING_QUESTIONS_BY_LANG.general);
+  return table[lang ?? DEFAULT_LANG[role] ?? "javascript"] ?? CODING_QUESTIONS.general;
+}
+
+/** Language used when the candidate never picked one. Per role, matching the
+ * pre-pool defaults — a Java SDE round must not open in JavaScript. */
+const DEFAULT_LANG: Record<RolePreset, CodeLanguage> = {
+  "java-sde-fresher": "java",
+  "frontend-fresher": "javascript",
+  general: "javascript",
+};
+
+/** The seed both the server and the editor must derive identically, or the
+ * interviewer would speak one problem while the editor showed another's
+ * starter. Uses the candidate's first answer, which is already fixed by the
+ * time the coding round can trigger. */
+export function codingSeedFrom(
+  candidateName: string,
+  history: readonly { speaker: string; text: string }[],
+): string {
+  const firstAnswer = history.find((h) => h.speaker === "candidate")?.text;
+  return `${candidateName}|${firstAnswer ?? ""}`;
+}
+
+/** FNV-1a, so the choice is spread evenly over the pool rather than clustering
+ * the way a naive character sum does on similar-looking answers. */
+function hashIndex(seed: string, mod: number): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h % mod;
 }
 
 const COMMON_TECH: HrQuestion[] = [
