@@ -6,14 +6,14 @@
 export const WAV_VOICE_RE = /^[A-Za-z0-9 ._-]{1,64}\.wav$/;
 
 export const INTERVIEWER_VOICES: Record<"hr" | "technical", string> = {
-  hr: "Elena.wav", // user-picked: warmest of the 28 predefined voices
+  hr: "Emily.wav", // user-picked default interviewer voice
   technical: "Michael.wav",
 };
 
 export const GD_PERSONA_VOICES: Record<string, string> = {
   moderator: "Olivia.wav",
   dominator: "Axel.wav",
-  data: "Gianna.wav", // Elena is the 1:1 interviewer — keep GD voices distinct
+  data: "Gianna.wav", // Emily is the 1:1 interviewer — keep GD voices distinct
   fence: "Connor.wav",
 };
 

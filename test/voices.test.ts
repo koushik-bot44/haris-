@@ -10,7 +10,7 @@ import {
 
 describe("voice casting (pinned cross-agent contract)", () => {
   it("casts the two interviewers exactly as pinned", () => {
-    expect(INTERVIEWER_VOICES).toEqual({ hr: "Elena.wav", technical: "Michael.wav" });
+    expect(INTERVIEWER_VOICES).toEqual({ hr: "Emily.wav", technical: "Michael.wav" });
   });
 
   it("casts the four GD personas exactly as pinned", () => {
@@ -23,7 +23,7 @@ describe("voice casting (pinned cross-agent contract)", () => {
   });
 
   it("voiceForRound maps round type to the interviewer voice", () => {
-    expect(voiceForRound("hr")).toBe("Elena.wav");
+    expect(voiceForRound("hr")).toBe("Emily.wav");
     expect(voiceForRound("technical")).toBe("Michael.wav");
   });
 
@@ -45,7 +45,7 @@ describe("voice casting (pinned cross-agent contract)", () => {
     it("SSR-safe: without window, reads null and writes are no-ops", () => {
       expect(getPreferredVoice()).toBeNull();
       expect(() => setPreferredVoice("Gianna.wav")).not.toThrow();
-      expect(voiceForRound("hr")).toBe("Elena.wav");
+      expect(voiceForRound("hr")).toBe("Emily.wav");
       expect(voiceForRound("technical")).toBe("Michael.wav");
     });
 
@@ -63,14 +63,14 @@ describe("voice casting (pinned cross-agent contract)", () => {
       setPreferredVoice(null);
       expect(getPreferredVoice()).toBeNull();
       expect(store.size).toBe(0);
-      expect(voiceForRound("hr")).toBe("Elena.wav");
+      expect(voiceForRound("hr")).toBe("Emily.wav");
       expect(voiceForRound("technical")).toBe("Michael.wav");
     });
 
     it("uses the pinned localStorage key 'pds_voice_file'", () => {
       const store = stubStorage();
-      setPreferredVoice("Elena.wav");
-      expect(store.get("pds_voice_file")).toBe("Elena.wav");
+      setPreferredVoice("Emily.wav");
+      expect(store.get("pds_voice_file")).toBe("Emily.wav");
     });
 
     it("a throwing localStorage (privacy mode) is survived", () => {
@@ -81,9 +81,9 @@ describe("voice casting (pinned cross-agent contract)", () => {
         localStorage: { getItem: boom, setItem: boom, removeItem: boom },
       });
       expect(getPreferredVoice()).toBeNull();
-      expect(() => setPreferredVoice("Elena.wav")).not.toThrow();
+      expect(() => setPreferredVoice("Emily.wav")).not.toThrow();
       expect(() => setPreferredVoice(null)).not.toThrow();
-      expect(voiceForRound("hr")).toBe("Elena.wav");
+      expect(voiceForRound("hr")).toBe("Emily.wav");
     });
   });
 

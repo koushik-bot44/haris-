@@ -156,9 +156,9 @@ export default function SetupPage() {
   };
 
   useEffect(() => {
-    // One voice — Elena. Studio-quality when the local voice server is up,
+    // One voice — Emily. Studio-quality when the local voice server is up,
     // otherwise the fast on-device voice fills in silently. No picker.
-    setPreferredVoice("Elena.wav");
+    setPreferredVoice("Emily.wav");
     fetch("/api/tts")
       .then((r) => r.json())
       .then((d) => setVoiceEngine(d.chatterbox ? "chatterbox" : "kokoro"))

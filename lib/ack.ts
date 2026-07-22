@@ -19,7 +19,7 @@ export type AckKind = "ack" | "encourage" | "rephrase";
 
 // The "ack" lines are the latency mask: a real interviewer thinks out loud for
 // a couple of seconds before the next question. These are pre-synthesized once
-// and play INSTANTLY when the answer ends, bridging the ~3s Elena needs to
+// and play INSTANTLY when the answer ends, bridging the ~3s the studio voice needs to
 // synthesize the real reply on a GPU-less machine — so there is never dead air
 // between the candidate finishing and the interviewer speaking. Kept varied so
 // five of them across one round don't sound like a loop.

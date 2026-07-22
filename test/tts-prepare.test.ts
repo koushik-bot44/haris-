@@ -61,7 +61,7 @@ describe("prepareSpeak (ahead-of-time TTS)", () => {
     const fetchMock: FetchMock = vi.fn(async () => okResponse());
     vi.stubGlobal("fetch", fetchMock);
 
-    const p = prepareSpeak("Hello there, welcome to the interview.", { voice: "Elena.wav" });
+    const p = prepareSpeak("Hello there, welcome to the interview.", { voice: "Emily.wav" });
     await p.ready;
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -70,7 +70,7 @@ describe("prepareSpeak (ahead-of-time TTS)", () => {
     expect(JSON.parse(init.body as string)).toEqual({
       text: "Hello there, welcome to the interview.",
       engine: "chatterbox", // no window → default engine, same as the live path
-      voice: "Elena.wav",
+      voice: "Emily.wav",
       stream: false, // ahead-of-time: buffered on purpose, not streamed
     });
 
