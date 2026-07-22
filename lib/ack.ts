@@ -23,15 +23,14 @@ export type AckKind = "ack" | "encourage" | "rephrase";
 // synthesize the real reply on a GPU-less machine — so there is never dead air
 // between the candidate finishing and the interviewer speaking. Kept varied so
 // five of them across one round don't sound like a loop.
+// Kept SHORT and FEW on purpose: each line is pre-synthesized through the one
+// local studio server at mic-check, and long/many lines saturate it — starving
+// the real greeting/question synthesis, whose failure is what used to drop the
+// voice to the (now-removed) system fallback. Short lines synthesize in ~1s.
 export const ACK_TEXTS: Record<AckKind, string[]> = {
-  ack: [
-    "Mm, okay. Let me think about that for a second.",
-    "Right, got it. Give me just a moment on that.",
-    "Okay, that's helpful — let me follow up on that.",
-    "I see. Let me take that in for a second.",
-  ],
-  encourage: ["Mm-hm — go on?", "Take your time.", "Sure, keep going."],
-  rephrase: ["No rush at all. Want me to rephrase the question?"],
+  ack: ["Mm, okay.", "Right, let me think.", "Got it, one moment."],
+  encourage: ["Mm-hm — go on?"],
+  rephrase: ["Want me to rephrase that?"],
 };
 
 const ACK_KINDS = Object.keys(ACK_TEXTS) as AckKind[];

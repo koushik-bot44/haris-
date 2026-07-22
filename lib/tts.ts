@@ -22,7 +22,10 @@ export function getVoiceEngine(): VoiceEngine {
   if (typeof window === "undefined") return "chatterbox";
   try {
     const v = window.localStorage.getItem(ENGINE_KEY);
-    return v === "system" || v === "kokoro" || v === "elevenlabs" || v === "chatterbox" ? v : "chatterbox";
+    // The robotic system voice is removed as a CHOICE — a stored "system"
+    // (stale from earlier testing) resolves to the studio voice instead.
+    if (v === "kokoro" || v === "elevenlabs" || v === "chatterbox") return v;
+    return "chatterbox";
   } catch {
     return "chatterbox";
   }
@@ -268,22 +271,28 @@ function serverSpeak(text: string, engine: "elevenlabs" | "chatterbox", voice?: 
       }
       await playBuffered(res);
     } catch {
-      // Request failed → next engine. Latency honesty: the fallback's REAL
-      // first syllable resolves firstSyllableAt (a failed fetch's own timing
-      // never does), and engineUsed reports who actually spoke.
+      // Studio synthesis failed. The robotic system voice is REMOVED — never
+      // fall to it. Order: the natural on-device voice if it's ready, else ONE
+      // more buffered studio retry (the server was likely just momentarily
+      // busy), else stay silent for this line (the caption still carries it).
+      // Silence beats the system voice the user rejected.
       if (!cancelled) {
-        // Prefer the natural on-device voice on any studio-engine failure; the
-        // robotic system voice is only the last resort when Kokoro isn't ready.
-        if ((engine === "chatterbox" || engine === "elevenlabs") && kokoroStatus() !== "ready") {
-          ensureKokoroLoading();
+        if (kokoroStatus() === "ready") {
+          fellBack = wrapKokoro(kokoroSpeak(splitSentences(text), kokoroVoice(voice)));
+          fellBack.firstSyllableAt.then(resolveFirst);
+          fellBack.engineUsed.then(resolveEngine);
+          await fellBack.done;
+        } else {
+          try {
+            await new Promise((r) => setTimeout(r, 450));
+            if (!cancelled) {
+              const retry = await postTts(false);
+              if (retry.ok) await playBuffered(retry);
+            }
+          } catch {
+            // give up silently — no system voice, ever
+          }
         }
-        fellBack =
-          (engine === "chatterbox" || engine === "elevenlabs") && kokoroStatus() === "ready"
-            ? wrapKokoro(kokoroSpeak(splitSentences(text), kokoroVoice(voice)))
-            : systemSpeak(text, undefined);
-        fellBack.firstSyllableAt.then(resolveFirst);
-        fellBack.engineUsed.then(resolveEngine);
-        await fellBack.done;
       }
     } finally {
       // Cancelled/empty paths must not hang awaiters (no-ops once resolved).

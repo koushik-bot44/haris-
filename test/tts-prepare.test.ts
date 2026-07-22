@@ -113,8 +113,10 @@ describe("prepareSpeak (ahead-of-time TTS)", () => {
     const p = prepareSpeak("Hi.");
     await expect(p.ready).resolves.toBeUndefined(); // never rejects
     const h = p.play();
-    // Live chatterbox fails too → kokoro not ready → system floor.
-    await expect(h.engineUsed).resolves.toBe("system");
+    // Live chatterbox fails and Kokoro isn't ready → the line stays SILENT
+    // (the system voice is removed); engineUsed reports the attempted studio
+    // engine, and done still resolves so no awaiter hangs.
+    await expect(h.engineUsed).resolves.toBe("chatterbox");
     await h.done;
   });
 

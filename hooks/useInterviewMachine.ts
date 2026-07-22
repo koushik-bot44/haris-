@@ -23,7 +23,7 @@ import { decideBargeIn, echoOverlap, ECHO_OVERLAP_THRESHOLD } from "@/lib/barge-
 import { aggregateMetrics, computeDeliveryMetrics, METRICS_VERSION } from "@/lib/metrics";
 import { newSessionId, saveSession } from "@/lib/session-store";
 import { ACK_TEXTS, playAck, prepareAcks, resetAcks, type AckHandle, type AckKind } from "@/lib/ack";
-import { ensureKokoroLoading } from "@/lib/tts";
+import { ensureKokoroLoading, getVoiceEngine } from "@/lib/tts";
 import { clampHistoryText, keepTail, stripAckEcho, stripSpeechTags } from "@/lib/speakable";
 import {
   acceptSpeculation,
@@ -387,9 +387,10 @@ export function useInterviewMachine(
     if (!textModeRef.current) void startMicViz();
     resetAcks();
     void prepareAcks(voiceForRound(roundType));
-    // Warm the on-device voice as the fallback so a Chatterbox hiccup degrades
-    // to the natural Kokoro voice, never the robotic system one.
-    ensureKokoroLoading();
+    // Only warm the on-device Kokoro voice when it's actually the engine (no
+    // studio server). On a Chatterbox machine loading Kokoro is pointless and
+    // its ONNX runtime spams the console — so leave it off entirely there.
+    if (getVoiceEngine() === "kokoro") ensureKokoroLoading();
     // Pre-warm the opening: the first interviewer call is deterministic (empty
     // history), so fire it AND synthesize its audio during preroll — the
     // greeting starts the instant the candidate clicks start.
