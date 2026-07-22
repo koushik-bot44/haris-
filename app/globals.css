@@ -1,24 +1,26 @@
-/* Dark-room focus palette — the interim floor from the plan's design-direction
-   task. An interview room wants focus, not dashboard white. The real typeface
-   pair + final palette arrive via /design-consultation (M1 weekend 2); every
-   color and face below is a token so that swap is one block, not a hunt. */
+/* Light studio theme (user direction, 2026-07-22): white, simple, great —
+   ElevenLabs-family design language executed originally. Near-monochrome ink
+   on white, hairline borders, pill buttons, one red reserved for "recording".
+   Every color is a token; the previous dark-room palette lives in git history. */
 
 :root {
-  --bg: #0f1113;
-  --surface: #16191c;
-  --surface-raised: #1d2125;
-  --border: #2a2f34;
-  --text: #e8e6e1;
-  --muted: #9a968e;
-  --accent: #e0a458; /* warm amber — the "on-air" lamp */
-  --accent-ink: #1a1409;
-  --live: #e07067; /* recording red, lightened for AA contrast on the dark ground */
-  --ok: #7fa871;
+  --bg: #ffffff;
+  --surface: #fafafa;
+  --surface-raised: #ffffff;
+  --border: #e8e8e6;
+  --text: #16161a;
+  --muted: #6f6f76;
+  --accent: #16161a; /* ink — buttons and emphasis are black, not colored */
+  --accent-ink: #ffffff;
+  --live: #d6493f; /* recording red — the only loud color in the system */
+  --ok: #3d8f5f;
 
   --font-display: Georgia, "Times New Roman", serif;
   --font-ui: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 
-  --radius: 4px;
+  --radius: 12px;
+  --radius-pill: 999px;
+  --shadow-soft: 0 1px 2px rgba(22, 22, 26, 0.04), 0 8px 24px rgba(22, 22, 26, 0.05);
   --space-1: 6px;
   --space-2: 12px;
   --space-3: 20px;
@@ -49,6 +51,7 @@ h3 {
   line-height: 1.2;
   text-wrap: balance;
   margin: 0 0 var(--space-2);
+  letter-spacing: -0.01em;
 }
 
 h1 {
@@ -59,7 +62,10 @@ h2 {
 }
 
 a {
-  color: var(--accent);
+  color: var(--text);
+}
+a:hover {
+  opacity: 0.7;
 }
 
 button {
@@ -68,30 +74,38 @@ button {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--text);
   outline-offset: 2px;
 }
 
 .btn {
   background: var(--accent);
   color: var(--accent-ink);
-  border: none;
-  border-radius: var(--radius);
-  padding: 12px 22px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill);
+  padding: 12px 24px;
   font-weight: 600;
-  font-size: 1rem;
+  font-size: 0.95rem;
   min-height: 44px;
+  transition: transform 0.08s ease, opacity 0.15s ease;
 }
 .btn:hover {
-  filter: brightness(1.08);
+  opacity: 0.85;
+}
+.btn:active {
+  transform: scale(0.98);
 }
 .btn.secondary {
   background: transparent;
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid #d9d9d6;
+}
+.btn.secondary:hover {
+  background: var(--surface);
+  opacity: 1;
 }
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
@@ -101,7 +115,7 @@ button {
   gap: var(--space-1);
 }
 .field label {
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--muted);
@@ -112,16 +126,23 @@ button {
   background: var(--surface-raised);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px 12px;
+  border-radius: 10px;
+  padding: 11px 14px;
   font: inherit;
+}
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  border-color: #b9b9b4;
+  outline: none;
 }
 
 .card {
-  background: var(--surface);
+  background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--space-3);
+  box-shadow: var(--shadow-soft);
 }
 
 .muted {
@@ -135,15 +156,14 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-/* Interviewer monogram — typographic persona, animated only while speaking.
-   Amplitude-driven animation is approximated with utterance activity until a
-   real audio pipeline exists (documented limitation). */
+/* Persona identity chip — quiet ink circle; the orb carries the life. */
 .monogram {
   width: 64px;
   height: 64px;
   border-radius: 50%;
-  border: 2px solid var(--accent);
-  color: var(--accent);
+  border: 1.5px solid var(--text);
+  color: var(--text);
+  background: var(--surface-raised);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -157,10 +177,10 @@ button {
 @keyframes monopulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(224, 164, 88, 0.35);
+    box-shadow: 0 0 0 0 rgba(22, 22, 26, 0.12);
   }
   50% {
-    box-shadow: 0 0 0 10px rgba(224, 164, 88, 0);
+    box-shadow: 0 0 0 9px rgba(22, 22, 26, 0);
   }
 }
 
@@ -223,4 +243,8 @@ table.plain th {
   padding: 8px 10px;
   text-align: left;
   font-size: 0.9rem;
+}
+
+blockquote {
+  color: var(--text);
 }

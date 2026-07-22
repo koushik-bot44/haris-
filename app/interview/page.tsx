@@ -324,7 +324,7 @@ function Live({
             <MonacoEditor
               height="320px"
               language={m.codingQuestion.language}
-              theme="vs-dark"
+              theme="light"
               value={codeDraft}
               onChange={(v) => setCodeDraft(v ?? "")}
               options={{ minimap: { enabled: false }, fontSize: 14, scrollBeyondLastLine: false }}
