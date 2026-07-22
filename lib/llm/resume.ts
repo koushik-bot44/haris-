@@ -1,5 +1,16 @@
 import { z } from "zod";
 import { cliAllowed, runClaude } from "@/lib/llm/cli-runner";
+import { groqComplete, groqEnabled } from "@/lib/llm/groq";
+
+// Production path: Groq whenever its key exists; dev keeps the CLI when it is
+// the selected provider. Heuristics remain the always-on rescue.
+function llmTextAvailable(): boolean {
+  return groqEnabled() || (cliAllowed() && (process.env.LLM_PROVIDER ?? "mock") === "claude-cli");
+}
+function llmText(prompt: string, timeoutMs: number): Promise<string> {
+  return groqEnabled() ? groqComplete(prompt, { maxTokens: 900 }) : runClaude(prompt, timeoutMs, "sonnet");
+}
+
 
 // Resume analysis — the department checklist's "AI Resume Analysis" module,
 // deliberately THIN per the plan: one call, three lists, honest fallback.
@@ -114,11 +125,11 @@ export function heuristicAnalysis(resume: string): ResumeAnalysis {
 export async function analyzeResume(
   resume: string,
 ): Promise<{ analysis: ResumeAnalysis; analyzer: "claude-cli" | "heuristic" }> {
-  if (cliAllowed() && (process.env.LLM_PROVIDER ?? "mock") === "claude-cli") {
+  if (llmTextAvailable()) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         // Background path — latency doesn't matter, quality does: sonnet.
-        const raw = await runClaude(buildPrompt(resume), 45_000, "sonnet");
+        const raw = await llmText(buildPrompt(resume), 45_000);
         const parsed = parseAnalysis(raw);
         if (parsed) return { analysis: parsed, analyzer: "claude-cli" };
       } catch {

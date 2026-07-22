@@ -1,17 +1,20 @@
 import type { LLMProvider } from "@/lib/llm/provider";
 import { mockProvider } from "@/lib/llm/mock";
 import { claudeCliProvider } from "@/lib/llm/claude-cli";
+import { groqEnabled, groqProvider } from "@/lib/llm/groq";
 
-// Provider selection. `claude-cli` = the user's authenticated Claude Code CLI
-// as the interviewer brain (dev-only, no API key, quickest model). When the
-// Gemini key lands: LLM_PROVIDER=gemini + key in env → add lib/llm/gemini.ts
-// here. Fallback (Groq/OpenRouter) joins the same map. Callers never change.
+// Provider selection. `groq` = production brain (sub-second turns, streams).
+// `claude-cli` = the user's authenticated Claude Code CLI (dev-only, no key).
+// `mock` = scripted flow for CI and rescue. Unset LLM_PROVIDER picks the best
+// available: groq when its key exists, else mock. Callers never change.
 const providers: Record<string, LLMProvider> = {
   mock: mockProvider,
   "claude-cli": claudeCliProvider,
+  groq: groqProvider,
 };
 
 export function getProvider(): LLMProvider {
-  const name = process.env.LLM_PROVIDER ?? "mock";
+  const name = process.env.LLM_PROVIDER;
+  if (!name) return groqEnabled() ? groqProvider : mockProvider;
   return providers[name] ?? mockProvider;
 }

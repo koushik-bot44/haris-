@@ -1,5 +1,16 @@
 import { z } from "zod";
 import { cliAllowed, runClaude } from "@/lib/llm/cli-runner";
+import { groqComplete, groqEnabled } from "@/lib/llm/groq";
+
+// Production path: Groq whenever its key exists; dev keeps the CLI when it is
+// the selected provider. Heuristics remain the always-on rescue.
+function llmTextAvailable(): boolean {
+  return groqEnabled() || (cliAllowed() && (process.env.LLM_PROVIDER ?? "mock") === "claude-cli");
+}
+function llmText(prompt: string, timeoutMs: number): Promise<string> {
+  return groqEnabled() ? groqComplete(prompt, { maxTokens: 900 }) : runClaude(prompt, timeoutMs, "sonnet");
+}
+
 import type { RolePreset } from "@/lib/types";
 
 export { guidanceCacheKey } from "@/lib/guidance-key";
@@ -286,11 +297,11 @@ export function heuristicGuidance(role: RolePreset, performance: GuidancePerform
 export async function buildGuidance(
   input: GuidanceInput,
 ): Promise<{ guidance: Guidance; source: "claude-cli" | "heuristic" }> {
-  if (cliAllowed() && (process.env.LLM_PROVIDER ?? "mock") === "claude-cli") {
+  if (llmTextAvailable()) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         // Background path — latency doesn't matter, quality does: sonnet.
-        const raw = await runClaude(buildPrompt(input), 45_000, "sonnet");
+        const raw = await llmText(buildPrompt(input), 45_000);
         const parsed = parseGuidance(raw);
         if (parsed) return { guidance: parsed, source: "claude-cli" };
       } catch {

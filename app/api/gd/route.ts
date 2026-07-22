@@ -4,6 +4,7 @@ import { computeGdTurns, GD_WRAP_AFTER } from "@/lib/gd/flow";
 import { GD_PERSONA_IDS, GD_ROSTER, personaName } from "@/lib/gd/roster";
 import { parseGdTurns } from "@/lib/gd/parse";
 import { cliAllowed, runClaude } from "@/lib/llm/cli-runner";
+import { groqComplete, groqEnabled } from "@/lib/llm/groq";
 
 // The GD debate endpoint. Stateless like /api/interview: the client sends the
 // attributed transcript, the brain returns the next batch of persona turns.
@@ -83,17 +84,18 @@ export async function POST(req: Request) {
   const personaTurns = data.history.filter((h) => h.personaId !== "candidate").length;
   const scripted = () => computeGdTurns(data.topic, data.candidateName, data.history, data.wantTurns);
 
-  if (
-    process.env.LLM_PROVIDER === "claude-cli" &&
-    cliAllowed() &&
+  const llmReady =
+    (groqEnabled() || (process.env.LLM_PROVIDER === "claude-cli" && cliAllowed())) &&
     data.history.length > 0 &&
-    personaTurns < GD_WRAP_AFTER
-  ) {
+    personaTurns < GD_WRAP_AFTER;
+  if (llmReady) {
     try {
-      // req.signal: a client abort/speculation cancel kills the CLI subprocess.
-      const raw = await runClaude(buildPrompt(data), undefined, undefined, req.signal);
+      // req.signal: a client abort/speculation cancel kills the request/subprocess.
+      const raw = groqEnabled()
+        ? await groqComplete(buildPrompt(data), { signal: req.signal, maxTokens: 600 })
+        : await runClaude(buildPrompt(data), undefined, undefined, req.signal);
       const turns = parseGdTurns(raw, data.wantTurns);
-      if (turns) return NextResponse.json({ turns, provider: "claude-cli" });
+      if (turns) return NextResponse.json({ turns, provider: groqEnabled() ? "groq" : "claude-cli" });
     } catch {
       // fall through to the scripted rescue
     }

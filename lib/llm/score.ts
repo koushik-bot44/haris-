@@ -1,4 +1,15 @@
 import { cliAllowed, runClaude } from "@/lib/llm/cli-runner";
+import { groqComplete, groqEnabled } from "@/lib/llm/groq";
+
+// Production path: Groq whenever its key exists; dev keeps the CLI when it is
+// the selected provider. Heuristics remain the always-on rescue.
+function llmTextAvailable(): boolean {
+  return groqEnabled() || (cliAllowed() && (process.env.LLM_PROVIDER ?? "mock") === "claude-cli");
+}
+function llmText(prompt: string, timeoutMs: number): Promise<string> {
+  return groqEnabled() ? groqComplete(prompt, { maxTokens: 900 }) : runClaude(prompt, timeoutMs, "sonnet");
+}
+
 import { isScoreable, rubricResponseSchema, toRubricEntry, type RubricResponse } from "@/lib/rubric";
 import type { RubricEntry } from "@/lib/types";
 
@@ -71,13 +82,13 @@ export async function scoreAnswer(
 ): Promise<{ entry: RubricEntry; scorer: "claude-cli" | "heuristic" } | typeof TOO_SHORT> {
   if (!isScoreable(answer)) return TOO_SHORT;
 
-  if (cliAllowed() && (process.env.LLM_PROVIDER ?? "mock") === "claude-cli") {
+  if (llmTextAvailable()) {
     // One retry on parse failure, then heuristic — a scoring hiccup must never
     // hold up the interview (scoring runs in the background per the plan).
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         // Background path — latency doesn't matter, quality does: sonnet.
-        const raw = await runClaude(buildScoringPrompt(question, answer), 45_000, "sonnet");
+        const raw = await llmText(buildScoringPrompt(question, answer), 45_000);
         const resp = parseRubric(raw);
         if (resp) return { entry: toRubricEntry(questionId, question, answer, resp), scorer: "claude-cli" };
       } catch {
