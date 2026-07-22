@@ -29,7 +29,12 @@ export function vizState(): Readonly<VizState> {
 
 export function setVizMode(mode: VizMode): void {
   state.mode = mode;
-  if (mode === "idle" || mode === "thinking") state.level = 0;
+  // Always zero on a mode change, not just for idle/thinking. Whichever writer
+  // owns the new mode refills this on its next frame, so a live source loses
+  // nothing — but if it never starts (mic permission denied, no analyser), the
+  // level would otherwise sit frozen at whatever the previous speaker left and
+  // the orb would show a constant, meaningless signal.
+  state.level = 0;
 }
 
 export function setAiHue(hue: [number, number, number] | null): void {

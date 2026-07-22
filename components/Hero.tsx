@@ -46,7 +46,7 @@ export function Hero() {
     <section className="hero" aria-labelledby="hero-title">
       <div className="hero-inner">
         <div className="hero-orb">
-          <VoiceOrb size={200} />
+          <VoiceOrb size={200} interactive />
         </div>
         <p className="eyebrow">
           <span className="dot" />

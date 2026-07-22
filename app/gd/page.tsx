@@ -374,15 +374,22 @@ function Room({ m, spaceDown }: { m: M; spaceDown: boolean }) {
         )}
       </div>
 
-      {/* The stage: the VoiceOrb mounts ONLY for the active debater (same
-          logic as before); Anita gets her quiet monogram; the candidate's
-          floor time shows the real hearing bars. Fixed height — no jumping. */}
+      {/* The stage: Anita gets her quiet monogram; the candidate's floor time
+          shows the real hearing bars. Fixed height — no jumping.
+
+          The orb stays MOUNTED for the whole discussion and fades in and out
+          instead of appearing with the active debater. A discussion changes
+          speaker 25-40 times, and remounting would rebuild the WebGL context
+          and recompile the shader at each handoff — a stutter at exactly the
+          moment the room is supposed to feel live. Paused while hidden, so an
+          invisible orb costs no GPU. */}
       <div className="gd-stage" aria-hidden>
-        {activeDebater ? (
-          <VoiceOrb size={120} hue={activeDebater.hue} />
-        ) : m.activeSpeaker === "moderator" ? (
+        <div className={`gd-orb-slot${activeDebater ? " on" : ""}`}>
+          <VoiceOrb size={120} hue={activeDebater?.hue} paused={!activeDebater} />
+        </div>
+        {!activeDebater && m.activeSpeaker === "moderator" ? (
           <span className="monogram speaking">A</span>
-        ) : m.candidateHasFloor ? (
+        ) : !activeDebater && m.candidateHasFloor ? (
           <span className={`level ${m.hearing ? "active" : ""} stage-level`}>
             <span /><span /><span /><span />
           </span>
