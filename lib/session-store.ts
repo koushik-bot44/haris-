@@ -37,12 +37,19 @@ function isSessionLike(value: unknown): value is Session {
 }
 
 // Login gates persistence (approved plan): the UI promises guests that
-// nothing leaves the device, so only a signed-in browser (Auth.js session
-// cookie present) may mirror to the server. Guests never POST.
+// nothing leaves the device, so only a signed-in browser may mirror to the
+// server. Guests never POST. The real credential ('pds_session' JWT) is
+// httpOnly and invisible to JS, so we read the non-secret 'pds_auth=1' marker
+// the login/register routes set alongside it. The legacy Auth.js token is kept
+// as a fallback for any Google-signed-in session.
 function hasAuthCookie(): boolean {
   try {
     const c = typeof document !== "undefined" ? document.cookie : "";
-    return c.includes("authjs.session-token") || c.includes("__Secure-authjs.session-token");
+    return (
+      c.includes("pds_auth=") ||
+      c.includes("authjs.session-token") ||
+      c.includes("__Secure-authjs.session-token")
+    );
   } catch {
     return false;
   }
