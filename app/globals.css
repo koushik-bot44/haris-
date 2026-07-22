@@ -37,8 +37,25 @@
   --radius-lg: 16px;
   --radius-pill: 999px;
 
-  /* Depth: hairline OR shadow — never a 1px border under a wide soft shadow. */
-  --shadow-raised: 0 1px 2px oklch(20% 0.01 270 / 0.06), 0 4px 8px oklch(20% 0.01 270 / 0.06);
+  /* Depth: hairline OR shadow on one element — never both. Raised surfaces use
+     a soft, layered shadow (three offsets) for real, calm elevation. */
+  --shadow-sm: 0 1px 2px oklch(24% 0.02 270 / 0.06);
+  --shadow-raised: 0 1px 2px oklch(24% 0.02 270 / 0.05), 0 5px 14px oklch(24% 0.02 270 / 0.06),
+    0 14px 30px oklch(24% 0.02 270 / 0.05);
+  --shadow-hover: 0 2px 4px oklch(24% 0.02 270 / 0.07), 0 10px 24px oklch(24% 0.02 270 / 0.09),
+    0 22px 46px oklch(24% 0.02 270 / 0.08);
+  --shadow-btn: 0 1px 2px oklch(20% 0.02 270 / 0.22), 0 2px 5px oklch(20% 0.02 270 / 0.12);
+
+  /* Fixed type scale — product register, display serif carries the humane
+     moments. Hero title fluidly scales; the rest are steady rem steps. */
+  --fs-hero: clamp(2.6rem, 6vw + 0.5rem, 3.9rem);
+  --fs-h1: 2.25rem;
+  --fs-h2: 1.5rem;
+  --fs-h3: 1.17rem;
+  --fs-lead: 1.16rem;
+  --fs-body: 1rem;
+  --fs-sm: 0.875rem;
+  --fs-xs: 0.78rem;
 
   --space-1: 6px;
   --space-2: 12px;
@@ -64,6 +81,10 @@
   box-sizing: border-box;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 html,
 body {
   margin: 0;
@@ -74,6 +95,8 @@ body {
   font-size: 16px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
 }
 
 /* Type scale — fixed rem, product register. Display face carries the humane
@@ -89,13 +112,13 @@ h3 {
   letter-spacing: -0.02em;
 }
 h1 {
-  font-size: 2.25rem;
+  font-size: var(--fs-h1);
 }
 h2 {
-  font-size: 1.5rem;
+  font-size: var(--fs-h2);
 }
 h3 {
-  font-size: 1.17rem;
+  font-size: var(--fs-h3);
 }
 
 p {
@@ -138,42 +161,71 @@ a.btn {
   padding: 12px 26px;
   font-weight: 600;
   font-size: 0.95rem;
+  line-height: 1.2;
   min-height: 44px;
+  box-shadow: var(--shadow-btn);
   transition:
     background var(--t-fast) var(--ease-out),
     border-color var(--t-fast) var(--ease-out),
-    transform 80ms var(--ease-out);
+    box-shadow var(--t-fast) var(--ease-out),
+    transform var(--t-fast) var(--ease-out);
 }
 .btn:hover {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 6px oklch(20% 0.02 270 / 0.24), 0 8px 18px oklch(20% 0.02 270 / 0.16);
 }
 .btn:active {
-  transform: scale(0.98);
+  transform: translateY(0) scale(0.985);
+  box-shadow: var(--shadow-btn);
 }
+/* Secondary + ghost carry no resting shadow — outline / text only. */
 .btn.secondary {
-  background: transparent;
+  background: var(--surface-raised);
   color: var(--text);
   border-color: var(--border-strong);
+  box-shadow: none;
 }
 .btn.secondary:hover {
   background: var(--surface);
-  border-color: var(--border-strong);
+  border-color: var(--text);
+  box-shadow: none;
 }
+.btn.ghost,
 .btn.quiet {
   background: transparent;
   color: var(--muted);
   border-color: transparent;
+  box-shadow: none;
   padding-inline: 14px;
 }
+.btn.ghost:hover,
 .btn.quiet:hover {
   color: var(--text);
   background: var(--surface);
+  transform: none;
+  box-shadow: none;
+}
+.btn.lg {
+  padding: 15px 32px;
+  font-size: 1.02rem;
+  min-height: 52px;
+}
+/* Compact size — the header sign-up / sign-out actions. */
+.btn.sm {
+  padding: 8px 16px;
+  font-size: 0.85rem;
+  min-height: 36px;
+}
+.btn.block {
+  width: 100%;
 }
 .btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
   transform: none;
+  box-shadow: none;
 }
 
 /* ——— Forms ——— */
@@ -210,12 +262,30 @@ a.btn {
 .field textarea::placeholder {
   color: var(--muted);
 }
+.field input:hover,
+.field select:hover,
+.field textarea:hover {
+  border-color: var(--border-strong);
+}
 .field input:focus,
 .field select:focus,
 .field textarea:focus {
   border-color: var(--text);
   outline: none;
-  box-shadow: 0 0 0 1px var(--text);
+  box-shadow: 0 0 0 3px oklch(20% 0.012 270 / 0.14);
+}
+.field .error {
+  font-size: var(--fs-sm);
+  color: var(--live);
+  font-weight: 500;
+}
+.field input[aria-invalid="true"],
+.field textarea[aria-invalid="true"] {
+  border-color: var(--live);
+}
+.field input[aria-invalid="true"]:focus,
+.field textarea[aria-invalid="true"]:focus {
+  box-shadow: 0 0 0 3px var(--live-soft);
 }
 .field select {
   appearance: none;
@@ -234,20 +304,25 @@ a.btn {
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 14px 16px;
+  padding: 15px 17px;
   cursor: pointer;
   transition:
     border-color var(--t-fast) var(--ease-out),
-    background var(--t-fast) var(--ease-out);
+    background var(--t-fast) var(--ease-out),
+    box-shadow var(--t-fast) var(--ease-out),
+    transform var(--t-fast) var(--ease-out);
 }
 .choice:hover {
   border-color: var(--border-strong);
-  background: var(--surface);
+  background: var(--surface-raised);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
 }
 .choice[aria-checked="true"],
 .choice[aria-pressed="true"] {
   border-color: var(--text);
-  box-shadow: 0 0 0 1px var(--text);
+  box-shadow: inset 0 0 0 1px var(--text);
+  transform: none;
 }
 .choice .choice-title {
   font-weight: 600;
@@ -265,13 +340,14 @@ a.btn {
   cursor: not-allowed;
 }
 
-/* ——— Surfaces ——— */
+/* ——— Surfaces — ONE card system ——— */
 .card {
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--space-3);
 }
+/* Raised = shadow, no border (never both on one element). */
 .card.raised {
   border: none;
   box-shadow: var(--shadow-raised);
@@ -280,6 +356,32 @@ a.btn {
 .card.tinted {
   background: var(--surface);
   border-color: var(--border);
+}
+
+/* Feature card — the premium raised surface used for proof + highlights.
+   Shadow only, softly lifts on hover. */
+.feature-card {
+  background: var(--surface-raised);
+  border: none;
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+  box-shadow: var(--shadow-raised);
+  transition:
+    transform var(--t-med) var(--ease-out),
+    box-shadow var(--t-med) var(--ease-out);
+}
+a.feature-card,
+button.feature-card {
+  display: block;
+  text-align: left;
+  width: 100%;
+  color: inherit;
+  text-decoration: none;
+}
+a.feature-card:hover,
+button.feature-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-hover);
 }
 
 .divider {
@@ -552,6 +654,34 @@ blockquote {
   color: var(--text);
   background: var(--surface-2);
 }
+/* Header auth actions — sit at the far right, never shrink. */
+.header-auth {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.header-user {
+  font-size: 0.85rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.header-signin {
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+.header-signin:hover {
+  color: var(--text);
+  background: var(--surface);
+}
 @media (max-width: 600px) {
   .app-header .inner {
     gap: var(--space-2);
@@ -560,4 +690,897 @@ blockquote {
   .app-nav a {
     padding: 6px 9px;
   }
+  /* Reclaim room for the nav+actions on phones — the greeting is non-essential. */
+  .header-user {
+    display: none;
+  }
+}
+
+/* ============================================================
+   Landing — hero, feature row, sections, footer, setup layout.
+   The orb is the signature visual; everything else stays calm.
+   ============================================================ */
+
+/* ——— Section rhythm ——— */
+.section {
+  padding-block: var(--space-5);
+}
+.section-head {
+  margin-bottom: var(--space-4);
+}
+.section-title {
+  font-family: var(--font-display, Georgia, serif);
+  font-weight: 500;
+  font-size: var(--fs-h2);
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  text-wrap: balance;
+  margin: 0 0 var(--space-1);
+}
+.section-sub {
+  color: var(--muted);
+  font-size: var(--fs-body);
+  margin: 0;
+  max-width: 56ch;
+}
+/* Eyebrow — used ONCE on the landing, never per-section. */
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.eyebrow .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+/* ——— Hero ——— */
+.hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  text-align: center;
+  padding: clamp(48px, 8vw, 92px) var(--space-3) clamp(40px, 6vw, 68px);
+}
+/* Tasteful hero background: one soft, cool radial glow behind the orb — the
+   idle-orb palette washed into the porcelain. Not a decorative pattern. */
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(46% 40% at 50% 24%, oklch(72% 0.085 268 / 0.22), transparent 72%),
+    radial-gradient(60% 55% at 50% 30%, oklch(78% 0.06 200 / 0.12), transparent 76%);
+  pointer-events: none;
+}
+.hero-inner {
+  max-width: 760px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.hero-orb {
+  margin-bottom: var(--space-3);
+  filter: drop-shadow(0 18px 40px oklch(60% 0.08 265 / 0.18));
+}
+.hero-title {
+  font-family: var(--font-display, Georgia, serif);
+  font-weight: 500;
+  font-size: var(--fs-hero);
+  line-height: 1.04;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+  margin: 0 0 var(--space-2);
+  max-width: 15ch;
+}
+.hero-sub {
+  color: var(--muted);
+  font-size: var(--fs-lead);
+  line-height: 1.55;
+  max-width: 54ch;
+  margin: 0 auto var(--space-4);
+  text-wrap: pretty;
+}
+.hero-cta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.hero-note {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  margin: 0;
+}
+
+/* ——— Feature row (voice / scoring / group discussion) ——— */
+.hero-features {
+  width: 100%;
+  max-width: 720px;
+  margin: var(--space-5) auto 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-1);
+  text-align: left;
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-4);
+}
+.feature {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 var(--space-2);
+  position: relative;
+}
+.feature + .feature::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--border);
+}
+.feature-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.feature-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.feature-icon svg {
+  width: 18px;
+  height: 18px;
+}
+.feature-title {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  letter-spacing: -0.01em;
+}
+.feature-desc {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  margin: 0;
+}
+
+/* ——— Badge — small filled emphasis pill (distinct from the quiet chip) ——— */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+.badge.ok {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+/* ——— Setup section (the real product entry, below the hero) ——— */
+.setup {
+  scroll-margin-top: 76px;
+}
+.round-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-2);
+}
+.setup-form {
+  display: grid;
+  gap: var(--space-4);
+  max-width: 540px;
+}
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+.stack {
+  display: grid;
+  gap: var(--space-3);
+}
+.inline-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.chip-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.setup-body {
+  display: grid;
+  gap: var(--space-4);
+}
+
+/* Generic inline error text (outside a .field). */
+.error {
+  color: var(--live);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+/* Resume disclosure — quiet, native <details>. */
+.disclosure > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.disclosure > summary::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--t-fast) var(--ease-out);
+}
+.disclosure[open] > summary::before {
+  transform: rotate(45deg);
+}
+.disclosure > summary:hover {
+  color: var(--text);
+}
+.disclosure-body {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+/* Resume analysis readout. */
+.analysis-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.analysis p {
+  margin: var(--space-2) 0 4px;
+  font-weight: 600;
+}
+.analysis ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+.analysis ul li {
+  margin: 2px 0;
+}
+
+/* Proof card — one real sample scorecard row above the fold. */
+.proof-label {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.proof-quote {
+  font-family: var(--font-display, Georgia, serif);
+  font-size: 1.1rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Barge-in toggle card. */
+.toggle-card {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  cursor: pointer;
+  padding: 14px 16px;
+}
+.toggle-card input[type="checkbox"] {
+  margin-top: 3px;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+.toggle-card .toggle-title {
+  font-weight: 600;
+  font-size: 0.92rem;
+  display: block;
+}
+.toggle-card .choice-desc {
+  display: block;
+  margin-top: 2px;
+}
+
+.start-note {
+  margin: var(--space-2) 0 0;
+}
+
+/* ATS readout inside the resume analysis. */
+.ats-score {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 10px;
+}
+.ats-score .n {
+  font-family: var(--font-display, Georgia, serif);
+  font-size: 2.4rem;
+  line-height: 1;
+}
+
+/* ——— Auth (login / register pages — forward-looking, one form system) ——— */
+.auth-wrap {
+  max-width: 420px;
+  margin: 0 auto;
+  padding: clamp(48px, 10vw, 96px) var(--space-3) var(--space-5);
+}
+.auth-card {
+  background: var(--surface-raised);
+  border: none;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-raised);
+  padding: var(--space-4);
+}
+.auth-card h1 {
+  font-size: 1.6rem;
+  margin-bottom: var(--space-1);
+}
+.auth-card .auth-sub {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  margin: 0 0 var(--space-4);
+}
+.auth-form {
+  display: grid;
+  gap: var(--space-3);
+}
+/* Quiet secondary path out of the card — full-width ghost, gap from the form. */
+.auth-guest {
+  margin-top: var(--space-3);
+}
+.auth-foot {
+  margin-top: var(--space-3);
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+/* ——— Footer ——— */
+.site-footer {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  margin-top: var(--space-6);
+}
+.site-footer .inner {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.site-footer .brand {
+  font-family: var(--font-display, Georgia, serif);
+  font-size: 1.02rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.site-footer .tagline {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  margin: 2px 0 0;
+  max-width: 42ch;
+}
+.footer-links {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.footer-links a {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  text-decoration: none;
+  transition: color var(--t-fast) var(--ease-out);
+}
+.footer-links a:hover {
+  color: var(--text);
+}
+
+/* ——— Responsive ——— */
+@media (max-width: 640px) {
+  .hero-features {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+    padding-top: var(--space-3);
+  }
+  .feature {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: 0;
+  }
+  .feature + .feature::before {
+    display: none;
+  }
+  .feature-icon {
+    flex-shrink: 0;
+  }
+  .field-row {
+    grid-template-columns: 1fr;
+  }
+  .site-footer .inner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .btn:hover,
+  .choice:hover,
+  .feature-card:hover,
+  a.feature-card:hover,
+  button.feature-card:hover {
+    transform: none;
+  }
+}
+
+/* ============================================================
+   The rooms — /interview and /gd, the two focus surfaces. The orb
+   and the spoken caption are the stars; every piece of chrome stays
+   quiet. Built entirely on the shared tokens + primitives
+   (.chip .level .card .btn .field) — no parallel systems.
+   ============================================================ */
+
+/* ——— Room chrome (shared top bar) ——— */
+.room-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+.room-bar-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.room-topic {
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.room-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* Question progress — a calm 5-segment meter, ink fill. */
+.qmeter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.qmeter i {
+  width: 16px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  transition: background var(--t-med) var(--ease-out);
+}
+.qmeter i.on {
+  background: var(--accent);
+}
+
+/* ——— The stage: orb + persona identity ——— */
+.orb-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 var(--space-3);
+}
+.persona-id {
+  display: grid;
+  gap: 1px;
+  text-align: center;
+}
+.persona-name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.persona-title {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+/* ——— Caption — the spoken words, the star of the room ——— */
+.room-live {
+  text-align: center;
+}
+.caption-shell {
+  min-height: 112px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  text-align: center;
+}
+.caption {
+  font-family: var(--font-display, Georgia, serif);
+  font-size: clamp(1.18rem, 2.2vw + 0.7rem, 1.42rem);
+  line-height: 1.42;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+  max-width: 60ch;
+  margin: 0 auto;
+  color: var(--text);
+}
+.caption-speaker {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+/* ——— Coding turn — the editor is the answer surface ——— */
+.code-answer {
+  margin-top: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+  text-align: left;
+}
+.code-pane {
+  padding: 0;
+  overflow: hidden;
+}
+.code-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.code-pane-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.code-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* ——— Your-turn affordance (listening) ——— */
+.room-hint {
+  margin-top: var(--space-3);
+}
+.turn-cue {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.turn-cue-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.turn-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.last-sentence {
+  margin-top: 12px;
+}
+.latency-note {
+  margin-top: var(--space-4);
+}
+
+/* ——— Text-mode answer ——— */
+.answer-form {
+  margin-top: var(--space-3);
+  max-width: 560px;
+  margin-inline: auto;
+  text-align: left;
+}
+.answer-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+/* ——— Mic check ——— */
+.mic-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+}
+.heard {
+  margin-top: var(--space-3);
+}
+.heard-quote {
+  font-family: var(--font-display, Georgia, serif);
+  font-style: italic;
+  font-size: 1.1rem;
+}
+.whisper-status {
+  margin-top: 10px;
+  color: var(--muted);
+}
+.whisper-status.ok {
+  color: var(--ok);
+}
+.mic-diag {
+  margin-top: 10px;
+}
+
+/* ——— Status / notices shared by both rooms ——— */
+.room-status {
+  margin: var(--space-3) 0;
+}
+.room-status p {
+  margin: 0;
+}
+.notice {
+  margin: 0 0 var(--space-4);
+}
+.notice-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.room-note {
+  margin-top: var(--space-5);
+  text-align: center;
+}
+
+/* ——— Interview summary rhythm ——— */
+.summary-questions {
+  display: grid;
+  gap: var(--space-4);
+  margin: var(--space-4) 0;
+}
+.summary-timeline {
+  margin: var(--space-4) 0;
+}
+.summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* ——— GD setup ——— */
+.gd-lead {
+  margin-top: 0;
+}
+.gd-topics {
+  margin: var(--space-4) 0;
+}
+.field-label {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.gd-custom {
+  margin-top: 16px;
+  max-width: 520px;
+}
+.gd-setup-foot {
+  display: grid;
+  gap: var(--space-3);
+  max-width: 520px;
+}
+.gd-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* ——— GD persona rail ——— */
+.persona-rail {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: var(--space-3);
+}
+.rail-chip {
+  transition:
+    transform var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+.rail-chip.active {
+  color: var(--text);
+  background: var(--surface-raised);
+  border-color: var(--border-strong);
+  transform: scale(1.06);
+}
+.rail-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.rail-level {
+  height: 12px;
+  transform: scale(0.6);
+  transform-origin: center;
+}
+
+/* ——— GD stage ——— */
+.gd-stage {
+  height: 136px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: var(--space-2);
+}
+.stage-level {
+  transform: scale(1.7);
+}
+.floor-hint {
+  margin: 0;
+}
+
+/* ——— GD live airtime meter ——— */
+.airtime {
+  margin-top: var(--space-3);
+}
+.airtime-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: var(--fs-sm);
+}
+.airtime-track {
+  position: relative;
+  height: 8px;
+  margin-top: 8px;
+  background: var(--surface-2);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.airtime-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in oklab, var(--ok) 22%, transparent);
+}
+.airtime-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  transition: width 0.4s var(--ease-out);
+}
+.airtime-fill.over {
+  background: var(--live);
+}
+
+/* ——— GD floor controls ——— */
+.floor-controls {
+  margin-top: var(--space-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.btn.secondary.hot,
+.btn.secondary.hot:hover {
+  border-color: var(--live);
+  color: var(--live);
+}
+.mic-trouble {
+  margin-top: var(--space-2);
+}
+
+/* ——— GD transcript rail ——— */
+.transcript {
+  margin-top: var(--space-3);
+  max-height: 180px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.transcript-line {
+  margin: 0 0 6px;
+}
+.transcript-line .who {
+  font-weight: 600;
+}
+
+/* ——— GD scorecard verdict ——— */
+.verdict {
+  margin: 0 0 var(--space-4);
+}
+.verdict-score {
+  font-family: var(--font-display, Georgia, serif);
+  font-size: 2.4rem;
+  line-height: 1;
+}
+.verdict-score .unit {
+  color: var(--muted);
+  font-size: 1.2rem;
+}
+.verdict-summary {
+  margin: 8px 0 0;
+}
+
+/* ——— Screen-reader only (aria-live regions) ——— */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

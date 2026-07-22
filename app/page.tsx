@@ -7,6 +7,7 @@ import { buildResumeProfile } from "@/lib/resume-profile";
 import { setVoiceEngine } from "@/lib/tts";
 import { setPreferredVoice } from "@/lib/voices";
 import type { CodeLanguage } from "@/lib/types";
+import { Hero } from "@/components/Hero";
 
 // Landing = the setup screen (binding UX spec). No marketing hero: the round
 // picker is the first thing on the page, and one real sample scorecard row sits
@@ -210,186 +211,187 @@ export default function SetupPage() {
   );
 
   return (
-    <main className="wrap">
-      <h1>Rehearse the real thing.</h1>
-      <p className="muted" style={{ marginTop: 0 }}>
-        A live voice interview with real feedback — spoken questions, adaptive deep-dives, and a scorecard
-        built from your own words.
-      </p>
+    <main>
+      <Hero />
 
-      {/* Proof, before the first click: a real sample scorecard row. */}
-      <figure className="card tinted" style={{ margin: "24px 0 32px", padding: "18px 20px" }}>
-        <figcaption className="small" style={{ fontWeight: 600, marginBottom: 4 }}>
-          Sample feedback <span className="muted" style={{ fontWeight: 500 }}>· structure 4/5</span>
-        </figcaption>
-        <p className="display" style={{ margin: 0, fontSize: "1.08rem", lineHeight: 1.5 }}>
-          “I split the migration into three checkpoints so we could roll back at each stage” — clear
-          situation-action-result shape. Lead with the outcome next time to score 5.
-        </p>
-      </figure>
-
-      <section aria-label="Pick your round" style={{ marginBottom: 32 }}>
-        <div role="radiogroup" aria-label="Interview round" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
-          {ROUNDS.map((r) => {
-            const disabled = r.id === "gd" && !GD_ON;
-            return (
-              <button
-                key={r.id}
-                role="radio"
-                aria-checked={round === r.id}
-                className="choice"
-                disabled={disabled}
-                onClick={() => setRound(r.id)}
-                {...(disabled ? undefined : roundRadio(r.id))}
-              >
-                <span className="choice-title">
-                  {r.title}
-                  {r.id === "gd" && !disabled && <span className="chip on"><span className="dot" />new</span>}
-                </span>
-                <span className="choice-desc">{disabled ? "In the works." : r.desc}</span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      <div style={{ display: "grid", gap: 24, maxWidth: 520 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div className="field">
-            <label htmlFor="name">Your name</label>
-            <input
-              id="name"
-              value={name}
-              maxLength={60}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Hari"
-            />
-            <span className="hint">The interviewer uses it.</span>
-          </div>
-          <div className="field">
-            <label htmlFor="role">Target role</label>
-            <select id="role" value={role} onChange={(e) => setRole(e.target.value)}>
-              <option value="general">General fresher</option>
-              <option value="java-sde-fresher">Java SDE fresher</option>
-              <option value="frontend-fresher">Frontend fresher</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Technical-round options: the coding exercise + editor follow this. */}
-        {round === "technical" && (
-          <div className="field">
-            <label htmlFor="code-lang">Coding language</label>
-            <select id="code-lang" value={codeLang} onChange={(e) => pickCodeLang(e.target.value as CodeLanguage)}>
-              {CODE_LANGS.map((l) => (
-                <option key={l.id} value={l.id}>{l.label}</option>
-              ))}
-            </select>
-            <span className="hint">The hands-on question and editor match it.</span>
-          </div>
-        )}
-
-        <details>
-          <summary className="small" style={{ cursor: "pointer", color: "var(--muted)" }}>
-            Add your resume (optional — the interviewer asks about YOUR projects)
-          </summary>
-          <div className="field" style={{ marginTop: 10 }}>
-            <textarea
-              rows={7}
-              value={resume}
-              maxLength={15000}
-              onChange={(e) => onResumeChange(e.target.value)}
-              placeholder="Paste resume text here, or upload the PDF below. It stays in this browser session."
-            />
-            <p className="small muted" style={{ margin: "4px 0 0" }}>
-              PDFs are read entirely in this browser — the file never leaves your device; only the
-              extracted text is used. Still, avoid sensitive personal data (phone, address).
-            </p>
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <input ref={pdfInputRef} type="file" accept=".pdf" hidden onChange={onPdfPick} />
-              <button className="btn secondary" onClick={() => pdfInputRef.current?.click()} disabled={extracting}>
-                {extracting ? "Reading PDF…" : "Upload PDF resume"}
-              </button>
-              <button className="btn secondary" onClick={() => analyze()} disabled={analyzing || resume.trim().length < 80}>
-                {analyzing ? "Analyzing…" : "Analyze my resume"}
-              </button>
-              {analyzeError && <span className="small" style={{ color: "var(--live)" }}>{analyzeError}</span>}
-            </div>
-            {analysis && (
-              <div className="card" style={{ marginTop: 10 }}>
-                <div className="small" style={{ fontWeight: 600 }}>
-                  Resume read{analyzer === "heuristic" ? " · basic check (brain offline)" : ""}
-                </div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 6, margin: "10px 0 0" }}>
-                  <span className="display" style={{ fontSize: "2.4rem", lineHeight: 1 }}>{analysis.atsScore}</span>
-                  <span className="muted">/100</span>
-                  <span className="small muted" style={{ marginLeft: 6 }}>ATS readiness</span>
-                </div>
-                <p style={{ margin: "8px 0 2px" }}><strong>Working for you</strong></p>
-                <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
-                  {analysis.strengths.map((s, i) => <li key={i}>{s}</li>)}
-                </ul>
-                <p style={{ margin: "8px 0 2px" }}><strong>An interviewer will probe</strong></p>
-                <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
-                  {analysis.gaps.map((s, i) => <li key={i}>{s}</li>)}
-                </ul>
-                <p style={{ margin: "8px 0 2px" }}><strong>Bring these up yourself</strong></p>
-                <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
-                  {analysis.talkingPoints.map((s, i) => <li key={i}>{s}</li>)}
-                </ul>
-                {analysis.missingSkills.length > 0 && (
-                  <>
-                    <p style={{ margin: "8px 0 6px" }}><strong>Missing skills</strong></p>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      {analysis.missingSkills.map((s, i) => <span key={i} className="chip">{s}</span>)}
-                    </div>
-                  </>
-                )}
-                {analysis.improvements.length > 0 && (
-                  <>
-                    <p style={{ margin: "8px 0 2px" }}><strong>Improvements</strong></p>
-                    <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
-                      {analysis.improvements.map((s, i) => <li key={i}>{s}</li>)}
-                    </ul>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        </details>
-
-
-        {round !== "gd" && (
-          <label
-            className="card tinted"
-            style={{ display: "flex", gap: 12, alignItems: "flex-start", cursor: "pointer", padding: "12px 16px" }}
-          >
-            <input
-              type="checkbox"
-              checked={bargeIn}
-              onChange={(e) => setBargeIn(e.target.checked)}
-              style={{ marginTop: 3, width: 18, height: 18, flexShrink: 0 }}
-            />
-            <span>
-              <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Let me interrupt the interviewer</span>
-              <span className="choice-desc" style={{ display: "block" }}>
-                Off by default — she finishes each question, then you answer. Turn on only with headphones,
-                or room noise will cut her off mid-question.
-              </span>
-            </span>
-          </label>
-        )}
-
-        <div>
-          <button className="btn" style={{ width: "100%", fontSize: "1rem" }} onClick={start}>
-            {round === "hr" ? "Start HR interview" : round === "technical" ? "Start technical interview" : "Start group discussion"}
-          </button>
-          <p className="small muted" style={{ margin: "10px 0 0" }}>
-            Voice interviews need Chrome on a laptop with a microphone. No login, nothing uploaded — your
-            session stays on this device.
+      <section id="setup" className="wrap setup">
+        <div className="section-head">
+          <h2 className="section-title">Set up your session</h2>
+          <p className="section-sub">
+            Pick a round, add a few details, and start talking. It takes under a minute — no login,
+            nothing uploaded.
           </p>
         </div>
-      </div>
+
+        <div className="setup-body">
+          {/* Proof, before the first click: a real sample scorecard row. */}
+          <figure className="feature-card proof">
+            <figcaption className="proof-label">
+              Sample feedback <span className="badge ok">structure 4/5</span>
+            </figcaption>
+            <p className="proof-quote">
+              “I split the migration into three checkpoints so we could roll back at each stage” — clear
+              situation-action-result shape. Lead with the outcome next time to score 5.
+            </p>
+          </figure>
+
+          <div role="radiogroup" aria-label="Interview round" className="round-grid">
+            {ROUNDS.map((r) => {
+              const disabled = r.id === "gd" && !GD_ON;
+              return (
+                <button
+                  key={r.id}
+                  role="radio"
+                  aria-checked={round === r.id}
+                  className="choice"
+                  disabled={disabled}
+                  onClick={() => setRound(r.id)}
+                  {...(disabled ? undefined : roundRadio(r.id))}
+                >
+                  <span className="choice-title">
+                    {r.title}
+                    {r.id === "gd" && !disabled && <span className="chip on"><span className="dot" />new</span>}
+                  </span>
+                  <span className="choice-desc">{disabled ? "In the works." : r.desc}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="setup-form">
+            <div className="field-row">
+              <div className="field">
+                <label htmlFor="name">Your name</label>
+                <input
+                  id="name"
+                  value={name}
+                  maxLength={60}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Hari"
+                />
+                <span className="hint">The interviewer uses it.</span>
+              </div>
+              <div className="field">
+                <label htmlFor="role">Target role</label>
+                <select id="role" value={role} onChange={(e) => setRole(e.target.value)}>
+                  <option value="general">General fresher</option>
+                  <option value="java-sde-fresher">Java SDE fresher</option>
+                  <option value="frontend-fresher">Frontend fresher</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Technical-round options: the coding exercise + editor follow this. */}
+            {round === "technical" && (
+              <div className="field">
+                <label htmlFor="code-lang">Coding language</label>
+                <select id="code-lang" value={codeLang} onChange={(e) => pickCodeLang(e.target.value as CodeLanguage)}>
+                  {CODE_LANGS.map((l) => (
+                    <option key={l.id} value={l.id}>{l.label}</option>
+                  ))}
+                </select>
+                <span className="hint">The hands-on question and editor match it.</span>
+              </div>
+            )}
+
+            <details className="disclosure">
+              <summary>Add your resume (optional — the interviewer asks about YOUR projects)</summary>
+              <div className="disclosure-body">
+                <div className="field">
+                  <textarea
+                    rows={7}
+                    value={resume}
+                    maxLength={15000}
+                    onChange={(e) => onResumeChange(e.target.value)}
+                    placeholder="Paste resume text here, or upload the PDF below. It stays in this browser session."
+                  />
+                  <span className="hint">
+                    PDFs are read entirely in this browser — the file never leaves your device; only the
+                    extracted text is used. Still, avoid sensitive personal data (phone, address).
+                  </span>
+                </div>
+                <div className="inline-actions">
+                  <input ref={pdfInputRef} type="file" accept=".pdf" hidden onChange={onPdfPick} />
+                  <button className="btn secondary" onClick={() => pdfInputRef.current?.click()} disabled={extracting}>
+                    {extracting ? "Reading PDF…" : "Upload PDF resume"}
+                  </button>
+                  <button className="btn secondary" onClick={() => analyze()} disabled={analyzing || resume.trim().length < 80}>
+                    {analyzing ? "Analyzing…" : "Analyze my resume"}
+                  </button>
+                  {analyzeError && <span className="error">{analyzeError}</span>}
+                </div>
+                {analysis && (
+                  <div className="card analysis">
+                    <div className="analysis-title">
+                      Resume read{analyzer === "heuristic" ? " · basic check (brain offline)" : ""}
+                    </div>
+                    <div className="ats-score">
+                      <span className="n">{analysis.atsScore}</span>
+                      <span className="muted">/100</span>
+                      <span className="small muted">ATS readiness</span>
+                    </div>
+                    <p>Working for you</p>
+                    <ul>
+                      {analysis.strengths.map((s, i) => <li key={i}>{s}</li>)}
+                    </ul>
+                    <p>An interviewer will probe</p>
+                    <ul>
+                      {analysis.gaps.map((s, i) => <li key={i}>{s}</li>)}
+                    </ul>
+                    <p>Bring these up yourself</p>
+                    <ul>
+                      {analysis.talkingPoints.map((s, i) => <li key={i}>{s}</li>)}
+                    </ul>
+                    {analysis.missingSkills.length > 0 && (
+                      <>
+                        <p>Missing skills</p>
+                        <div className="chip-row">
+                          {analysis.missingSkills.map((s, i) => <span key={i} className="chip">{s}</span>)}
+                        </div>
+                      </>
+                    )}
+                    {analysis.improvements.length > 0 && (
+                      <>
+                        <p>Improvements</p>
+                        <ul>
+                          {analysis.improvements.map((s, i) => <li key={i}>{s}</li>)}
+                        </ul>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </details>
+
+            {round !== "gd" && (
+              <label className="card tinted toggle-card">
+                <input
+                  type="checkbox"
+                  checked={bargeIn}
+                  onChange={(e) => setBargeIn(e.target.checked)}
+                />
+                <span>
+                  <span className="toggle-title">Let me interrupt the interviewer</span>
+                  <span className="choice-desc">
+                    Off by default — she finishes each question, then you answer. Turn on only with headphones,
+                    or room noise will cut her off mid-question.
+                  </span>
+                </span>
+              </label>
+            )}
+
+            <div>
+              <button className="btn block lg" onClick={start}>
+                {round === "hr" ? "Start HR interview" : round === "technical" ? "Start technical interview" : "Start group discussion"}
+              </button>
+              <p className="small muted start-note">
+                Voice interviews need Chrome on a laptop with a microphone. No login, nothing uploaded — your
+                session stays on this device.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
   );
 }

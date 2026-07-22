@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Newsreader, Schibsted_Grotesk } from "next/font/google";
 import { AppHeader } from "@/components/AppHeader";
+import { SiteFooter } from "@/components/SiteFooter";
 import "./globals.css";
 
 const fontUi = Schibsted_Grotesk({
@@ -28,6 +29,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <AppHeader />
         {children}
+        <SiteFooter />
       </body>
     </html>
   );
