@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampTurn, deriveProgress, HARD_STOP_ANSWERS, parseInterviewerJson } from "@/lib/llm/parse";
+import { clampTurn, deriveProgress, HARD_STOP_ANSWERS, parseInterviewerJson, transcriptFor } from "@/lib/llm/parse";
 import type { HistoryEntry } from "@/lib/types";
 
 describe("interviewer JSON parsing (LLM provider hardening)", () => {
@@ -33,5 +33,31 @@ describe("interviewer JSON parsing (LLM provider hardening)", () => {
     const clamped = clampTurn({ type: "question", text: "One more…", questionIndex: 5, done: false }, progress);
     expect(clamped.done).toBe(true);
     expect(clamped.type).toBe("wrapup");
+  });
+
+  it("gives deep-dive chains room: hard stop is 16, and never fires below it", () => {
+    expect(HARD_STOP_ANSWERS).toBe(16);
+    const history: HistoryEntry[] = [];
+    for (let i = 0; i < HARD_STOP_ANSWERS - 1; i++) {
+      history.push({ speaker: "interviewer", text: `Q${i}` }, { speaker: "candidate", text: `A${i}` });
+    }
+    const turn = clampTurn({ type: "followup", text: "Go deeper…", questionIndex: 5, done: false }, deriveProgress(history));
+    expect(turn.done).toBe(false);
+    expect(turn.type).toBe("followup");
+  });
+});
+
+describe("transcriptFor persona labeling", () => {
+  const history: HistoryEntry[] = [
+    { speaker: "interviewer", text: "Hello." },
+    { speaker: "candidate", text: "Hi there." },
+  ];
+
+  it("defaults the interviewer label to 'Interviewer'", () => {
+    expect(transcriptFor(history)).toBe("Interviewer: Hello.\nCandidate: Hi there.");
+  });
+
+  it("labels the interviewer with the given persona name", () => {
+    expect(transcriptFor(history, "Arjun")).toBe("Arjun: Hello.\nCandidate: Hi there.");
   });
 });

@@ -52,16 +52,50 @@ export function effectiveQuestions(
   return out;
 }
 
+/** Max follow-ups per question in the scripted fallback: the fixture's canned
+ * follow-up, then one generic second-level probe — deterministic depth. */
+export const MAX_FOLLOWUPS_PER_QUESTION = 2;
+
+/** Second-level probes for the scripted fallback. Every string here must stay
+ * distinct from all fixture question/followup text — readPosition attributes
+ * them by exact-text matching, so a collision would corrupt the position. */
+export const DEEP_PROBES: Record<"hr" | "technical", string[]> = {
+  hr: [
+    "What was the hardest part of that — and how did you handle it?",
+    "If you had to do that again tomorrow, what is the one thing you would change?",
+    "Who pushed back on you during that, and how did you respond?",
+    "What surprised you most once you were actually in that situation?",
+  ],
+  technical: [
+    "What was the hardest part of that — and how did you handle it?",
+    "Where does that approach break down — which edge case hurts it most?",
+    "What tradeoff did you accept there, and when would it be the wrong call?",
+    "If that had to handle ten times the load tomorrow, what breaks first?",
+  ],
+};
+
+const ALL_DEEP_PROBES = new Set([...DEEP_PROBES.hr, ...DEEP_PROBES.technical]);
+
+// Seeded like seededPick: name + question index, no Math.random — the same
+// session always sees the same probe for the same question.
+function pickDeepProbe(candidateName: string, roundType: "hr" | "technical", questionIndex: number): string {
+  const pool = DEEP_PROBES[roundType];
+  const seedStr = `${candidateName || "candidate"}#${questionIndex}`;
+  let seed = 0;
+  for (let i = 0; i < seedStr.length; i++) seed = (seed * 31 + seedStr.charCodeAt(i)) >>> 0;
+  return pool[seed % pool.length];
+}
+
 interface FlowPosition {
   askedMain: number; // main questions already asked
-  followupUsedFor: Set<number>; // question indices (1-based) that got a follow-up
+  followupsUsed: Map<number, number>; // question index (1-based) -> follow-ups asked (0-2)
   lastWasFollowup: boolean;
   greeted: boolean;
 }
 
 /** Reconstruct where we are purely from history — the route is stateless. */
 export function readPosition(history: HistoryEntry[], questions: FlowQuestion[]): FlowPosition {
-  const pos: FlowPosition = { askedMain: 0, followupUsedFor: new Set(), lastWasFollowup: false, greeted: false };
+  const pos: FlowPosition = { askedMain: 0, followupsUsed: new Map(), lastWasFollowup: false, greeted: false };
   for (const h of history) {
     if (h.speaker !== "interviewer") continue;
     if (!pos.greeted) {
@@ -76,7 +110,14 @@ export function readPosition(history: HistoryEntry[], questions: FlowQuestion[])
     }
     const fIdx = questions.findIndex((q) => q.followup && h.text === q.followup);
     if (fIdx >= 0) {
-      pos.followupUsedFor.add(fIdx + 1);
+      pos.followupsUsed.set(fIdx + 1, (pos.followupsUsed.get(fIdx + 1) ?? 0) + 1);
+      pos.lastWasFollowup = true;
+      continue;
+    }
+    // Generic second-level probe: attributed to the question current when it
+    // was asked — history is sequential, so that is askedMain at this point.
+    if (ALL_DEEP_PROBES.has(h.text) && pos.askedMain >= 1) {
+      pos.followupsUsed.set(pos.askedMain, (pos.followupsUsed.get(pos.askedMain) ?? 0) + 1);
       pos.lastWasFollowup = true;
     }
   }
@@ -84,7 +125,7 @@ export function readPosition(history: HistoryEntry[], questions: FlowQuestion[])
 }
 
 /** Follow-up heuristic: thin answers (short, or missing all expected keywords)
- * earn the canned follow-up — max one per question, never on the coding slot. */
+ * earn a deeper probe — applied at each chain level, never on the coding slot. */
 export function wantsFollowup(answer: string, q: FlowQuestion): boolean {
   if (q.coding || !q.followup) return false;
   const words = answer.trim().split(/\s+/).filter(Boolean).length;
@@ -111,15 +152,13 @@ export function computeNextTurn(
   const lastCandidate = [...history].reverse().find((h) => h.speaker === "candidate");
   const currentQ = pos.askedMain >= 1 ? questions[pos.askedMain - 1] : null;
 
-  // Candidate just answered a main question → maybe follow up (once per question).
-  if (
-    currentQ &&
-    lastCandidate &&
-    !pos.lastWasFollowup &&
-    !pos.followupUsedFor.has(pos.askedMain) &&
-    wantsFollowup(lastCandidate.text, currentQ)
-  ) {
-    return { type: "followup", text: currentQ.followup, questionIndex: pos.askedMain, done: false };
+  // Candidate just answered on the current question → maybe probe deeper.
+  // Chain of up to MAX_FOLLOWUPS_PER_QUESTION: the canned follow-up first,
+  // then one seeded generic probe — same wantsFollowup heuristic at each level.
+  const used = pos.followupsUsed.get(pos.askedMain) ?? 0;
+  if (currentQ && lastCandidate && used < MAX_FOLLOWUPS_PER_QUESTION && wantsFollowup(lastCandidate.text, currentQ)) {
+    const text = used === 0 ? currentQ.followup : pickDeepProbe(candidateName, roundType, pos.askedMain);
+    return { type: "followup", text, questionIndex: pos.askedMain, done: false };
   }
 
   if (pos.askedMain >= QUESTIONS_PER_INTERVIEW) {

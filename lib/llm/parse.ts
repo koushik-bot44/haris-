@@ -46,7 +46,7 @@ export function deriveProgress(history: HistoryEntry[]): Progress {
   return { answers, interviewerTurns };
 }
 
-export const HARD_STOP_ANSWERS = 8; // 5 main + up to 3 follow-ups — never longer
+export const HARD_STOP_ANSWERS = 16; // 5 deep-dive topics × probe chains need room — never longer
 
 /** Force-terminate runaway interviews regardless of what the model returns. */
 export function clampTurn(turn: InterviewerTurn, progress: Progress): InterviewerTurn {
@@ -56,8 +56,8 @@ export function clampTurn(turn: InterviewerTurn, progress: Progress): Interviewe
   return turn;
 }
 
-export function transcriptFor(history: HistoryEntry[]): string {
+export function transcriptFor(history: HistoryEntry[], personaName: string = "Interviewer"): string {
   return history
-    .map((h) => `${h.speaker === "interviewer" ? "Priya" : "Candidate"}: ${h.text}`)
+    .map((h) => `${h.speaker === "interviewer" ? personaName : "Candidate"}: ${h.text}`)
     .join("\n");
 }
