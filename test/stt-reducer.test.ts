@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fullTranscript,
   initialSttState,
@@ -7,6 +7,7 @@ import {
   type SttAction,
   type SttState,
 } from "@/lib/stt-reducer";
+import { getSttEngine, setSttEngineEphemeral } from "@/lib/stt";
 
 // The most fragile code in the project, tested without a mic: scripted
 // onresult/onend/onerror interleavings drive the pure reducer.
@@ -129,5 +130,35 @@ describe("stt reducer", () => {
     ]);
     const kinds = state.trace.map((e) => e.kind);
     expect(kinds).toEqual(["start", "result", "restart", "result", "stop"]);
+  });
+});
+
+describe("ephemeral STT engine override (a transient degrade must not persist)", () => {
+  afterEach(() => {
+    setSttEngineEphemeral(null);
+    vi.unstubAllGlobals();
+  });
+
+  it("overrides getSttEngine for the session and clears with null", () => {
+    expect(getSttEngine()).toBe("auto"); // node: no window, no stored preference
+    setSttEngineEphemeral("whisper");
+    expect(getSttEngine()).toBe("whisper");
+    setSttEngineEphemeral(null);
+    expect(getSttEngine()).toBe("auto");
+  });
+
+  it("never writes localStorage — the stored preference survives the session", () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => void store.set(k, v),
+      },
+    });
+    setSttEngineEphemeral("whisper");
+    expect(getSttEngine()).toBe("whisper");
+    expect(store.size).toBe(0); // the degrade-time switch left no trace
+    setSttEngineEphemeral(null);
+    expect(getSttEngine()).toBe("auto"); // back to the (unset) stored preference
   });
 });

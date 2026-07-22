@@ -25,7 +25,7 @@ describe("interview request validation (proxy hardening)", () => {
   });
 
   it("caps history length (the proxy is not a free general LLM API)", () => {
-    const history = Array.from({ length: 31 }, () => ({ speaker: "candidate" as const, text: "x" }));
+    const history = Array.from({ length: 49 }, () => ({ speaker: "candidate" as const, text: "x" }));
     expect(interviewRequestSchema.safeParse({ ...valid, history }).success).toBe(false);
   });
 

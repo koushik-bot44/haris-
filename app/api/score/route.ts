@@ -7,7 +7,8 @@ import { scoreAnswer, TOO_SHORT } from "@/lib/llm/score";
 // call, never the batch transcript).
 
 const bodySchema = z.object({
-  questionId: z.number().int().min(1).max(8),
+  // Deep-dive rounds push question ids past 8; the hook clamps at 20 too.
+  questionId: z.number().int().min(1).max(20),
   question: z.string().min(1).max(1200),
   answer: z.string().min(1).max(8000),
 });
