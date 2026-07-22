@@ -69,10 +69,10 @@ describe("parseStreamedTurn (spoken text + @@CTRL protocol)", () => {
   });
 
   it("carries an explicit asked:false — a turn that only answers the candidate", () => {
-    const raw = 'I\'m Priya, HR here at Meridian.\n@@CTRL {"type":"reply","questionIndex":0,"asked":false,"done":false}';
+    const raw = 'I\'m Haris, the AI running your interview.\n@@CTRL {"type":"reply","questionIndex":0,"asked":false,"done":false}';
     expect(parseStreamedTurn(raw)).toEqual({
       type: "reply",
-      text: "I'm Priya, HR here at Meridian.",
+      text: "I'm Haris, the AI running your interview.",
       questionIndex: 0,
       done: false,
       asked: false,
@@ -218,6 +218,6 @@ describe("transcriptFor persona labeling", () => {
   });
 
   it("labels the interviewer with the given persona name", () => {
-    expect(transcriptFor(history, "Arjun")).toBe("Arjun: Hello.\nCandidate: Hi there.");
+    expect(transcriptFor(history, "Haris")).toBe("Haris: Hello.\nCandidate: Hi there.");
   });
 });

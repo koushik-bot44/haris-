@@ -8,14 +8,17 @@
 import type { HrQuestion } from "@/lib/fixtures/hr-questions";
 import type { CodeLanguage, RolePreset } from "@/lib/types";
 
+// One identity across every round: Haris, an AI, openly playing the role the
+// round calls for. It used to claim to be "Arjun Rao, tech lead at Meridian
+// Corp", which is a person who does not exist at a company that does not exist.
 export const TECH_PERSONA = {
-  name: "Arjun Rao",
-  title: "Tech Lead, Meridian Corp",
-  initials: "AR",
+  name: "Haris",
+  title: "AI interviewer · Technical round",
+  initials: "H",
 };
 
 export const TECH_GREETING = (name: string) =>
-  `Hi ${name}, I'm Arjun Rao, tech lead at Meridian Corp. This round is technical, and there's some hands-on coding in it. ` +
+  `Hi ${name}, I'm Haris — an AI interviewer. For this round I'm playing the technical interviewer, and there's some hands-on coding in it. ` +
   `Don't worry about perfect answers; I care how you think, and you can ask me things too. Let's start.`;
 
 export const TECH_WRAPUP = (name: string) =>

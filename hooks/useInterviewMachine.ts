@@ -43,7 +43,7 @@ export interface Persona {
   initials: string;
 }
 
-const HR_PERSONA: Persona = { name: "Priya Sharma", title: "HR, Meridian Corp", initials: "PS" };
+const HR_PERSONA: Persona = { name: "Haris", title: "AI interviewer · HR round", initials: "H" };
 
 /** Setup-page extras (pinned sessionStorage keys) read ONCE at hook init and
  * sent on EVERY /api/interview body — live, speculative, and opening — so the

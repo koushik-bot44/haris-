@@ -20,7 +20,11 @@ const DEFAULT_MODEL = "llama-3.3-70b-versatile";
  * questions mid-interview is exactly what makes this feel like a form. Free-tier
  * Groq meters tokens per minute per model, so the small model usually still has
  * headroom when the big one has none. */
-const RATE_LIMIT_FALLBACK_MODEL = "llama-3.1-8b-instant";
+const RATE_LIMIT_FALLBACK_MODEL = process.env.GROQ_FALLBACK_MODEL || "llama-3.1-8b-instant";
+
+/** Set once the fallback model turns out to be blocked for this org, so we stop
+ * paying a doomed round trip on every rate-limited turn. Process-lifetime. */
+let fallbackUnavailable = false;
 
 export function groqEnabled(): boolean {
   return Boolean(process.env.GROQ_API_KEY);
@@ -196,15 +200,33 @@ export const groqProvider = {
         // Rate limited on the main model: drop to the small one rather than to
         // canned questions. Any other failure propagates to the outer catch.
         if (!(err instanceof Error) || !err.message.includes("429")) throw err;
+        // The fallback is only useful if the org actually allows that model.
+        // Observed in the wild: the main model enabled, the small one still
+        // blocked — so every rate-limited turn paid a second round trip just to
+        // be refused, then landed on canned questions anyway. Ask once, then
+        // remember, and let the caller fail straight through to the rescue.
+        if (fallbackUnavailable) throw err;
         console.warn("[interview] main model rate-limited, retrying on", RATE_LIMIT_FALLBACK_MODEL);
         buffer = "";
         lastEmitted = "";
-        raw = await groqComplete(prompt, {
-          signal: o.signal,
-          onDelta,
-          maxTokens,
-          model: RATE_LIMIT_FALLBACK_MODEL,
-        });
+        try {
+          raw = await groqComplete(prompt, {
+            signal: o.signal,
+            onDelta,
+            maxTokens,
+            model: RATE_LIMIT_FALLBACK_MODEL,
+          });
+        } catch (fallbackErr) {
+          if (fallbackErr instanceof Error && /_40[13]$/.test(fallbackErr.message)) {
+            fallbackUnavailable = true;
+            console.warn(
+              `[interview] ${RATE_LIMIT_FALLBACK_MODEL} is not enabled on this Groq org — ` +
+                `enable it at https://console.groq.com/settings/limits so rate-limited turns ` +
+                `stay conversational instead of dropping to the fixture bank`,
+            );
+          }
+          throw fallbackErr;
+        }
       }
       const parsed = parseStreamedTurn(raw);
       if (parsed) {

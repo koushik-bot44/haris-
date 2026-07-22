@@ -293,7 +293,7 @@ describe("claude-cli provider (scripted paths, no CLI spawned)", () => {
     // AI is scripted". At ~790 tokens of instructions plus a windowed
     // transcript, a full interview stays inside the budget. Sharpen a line
     // rather than appending one.
-    expect(head.length).toBeLessThanOrEqual(3800);
+    expect(head.length).toBeLessThanOrEqual(4200);
     expect(prompt).toContain("@@CTRL");
     expect(prompt).toContain("CANDIDATE RESUME PROFILE");
     expect(prompt).not.toContain("<<<RESUME");

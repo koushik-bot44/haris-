@@ -116,8 +116,8 @@ describe("report page + replay helpers", () => {
 
   it("speakerName prefers the recorded persona, else the round's default", () => {
     expect(speakerName(turn("candidate", 0, 1), "hr")).toBe("You");
-    expect(speakerName(turn("interviewer", 0, 1), "hr")).toBe("Priya");
-    expect(speakerName(turn("interviewer", 0, 1), "technical")).toBe("Arjun");
+    expect(speakerName(turn("interviewer", 0, 1), "hr")).toBe("Haris");
+    expect(speakerName(turn("interviewer", 0, 1), "technical")).toBe("Haris");
     expect(speakerName(turn("interviewer", 0, 1, { personaId: "dominator", personaName: "Axel" }), "gd")).toBe("Axel");
     expect(speakerName(turn("interviewer", 0, 1), "gd")).toBe("Speaker");
   });

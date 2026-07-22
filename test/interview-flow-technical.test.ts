@@ -33,7 +33,7 @@ describe("technical round flow", () => {
 
   it("greets with the technical persona, not HR", () => {
     const first = computeNextTurn("Hari", [], "technical", "general");
-    expect(first.text).toContain("Arjun Rao");
+    expect(first.text).toContain("Haris");
     expect(first.type).toBe("greeting");
   });
 

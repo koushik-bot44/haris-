@@ -208,9 +208,14 @@ export const VERBAL_ACKS = [
 // No question count in the greeting: promising "five questions" primes the
 // candidate to experience a form, and the interview no longer runs on a fixed
 // count anyway — it goes where the conversation goes.
+//
+// Honest about what it is. This used to introduce itself as "Priya Sharma, HR
+// at Meridian Corp" — a fabricated human at a fabricated company. Haris is an
+// AI that is PLAYING an interviewer, and says so.
 export const GREETING = (name: string) =>
-  `Hello ${name}, I'm Priya Sharma, HR at Meridian Corp. Thanks for joining today. ` +
-  `This is just a conversation — around ten minutes. Ask me anything as we go. So, tell me a bit about yourself.`;
+  `Hi ${name}, I'm Haris — an AI interviewer. For this round I'm playing the HR interviewer, ` +
+  `so treat it like the real thing. It's just a conversation, around ten minutes, and you can ask me anything as we go. ` +
+  `So, tell me a bit about yourself.`;
 
 export const WRAPUP = (name: string) =>
   `That concludes our round, ${name}. Thank you — you'll see your feedback in just a moment.`;

@@ -94,7 +94,7 @@ export function roundLabel(roundType: RoundType): string {
 }
 
 /** First names only — matches the live room's caption voice. */
-const SPEAKER_FALLBACK: Record<RoundType, string> = { hr: "Priya", technical: "Arjun", gd: "Speaker" };
+const SPEAKER_FALLBACK: Record<RoundType, string> = { hr: "Haris", technical: "Haris", gd: "Speaker" };
 
 /** Timeline label: the recorded persona, else the round's default persona. */
 export function speakerName(turn: Turn, roundType: RoundType): string {
