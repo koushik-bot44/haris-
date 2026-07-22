@@ -87,14 +87,41 @@ export async function recallCandidate(candidateName: string, query: string): Pro
   }
 }
 
+/** Written this process already — cheap guard against storing the same fact
+ * repeatedly when a candidate repeats themselves or retries an answer. */
+const written = new Set<string>();
+
+/** Is this the candidate ASKING rather than telling?
+ *
+ * Worth filtering because the store filled up with things like "before I answer
+ * — what would I actually be doing day to day in this role?" recorded as a fact
+ * about the candidate. It is a fact about their curiosity at best, and at worst
+ * it comes back in a later session as though they had told us something. Only
+ * what they say about THEMSELVES is memory. */
+export function worthRemembering(text: string): boolean {
+  const t = text.trim();
+  return t.length >= MIN_MEMORABLE_CHARS && !isQuestion(t);
+}
+
+function isQuestion(text: string): boolean {
+  const t = text.trim();
+  if (!t.endsWith("?")) return false;
+  // A long answer that happens to end on a rhetorical question is still an
+  // answer; a short "what's the stack?" is not.
+  return t.split(/\s+/).length < 25;
+}
+
 /** Store what the candidate said. Fire-and-forget: never awaited on the turn
  * path, never allowed to reject. */
 export function rememberAnswer(candidateName: string, roundType: string, answer: string): void {
   const key = apiKey();
   if (!key) return;
   const text = answer.trim();
-  if (text.length < MIN_MEMORABLE_CHARS) return;
+  if (!worthRemembering(text)) return;
   const tag = containerTagFor(candidateName);
+  const dedupe = `${tag}::${text.toLowerCase().replace(/\s+/g, " ")}`;
+  if (written.has(dedupe)) return;
+  written.add(dedupe);
   void fetch(`${API}/v3/documents`, {
     method: "POST",
     headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },

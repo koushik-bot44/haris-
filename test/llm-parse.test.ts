@@ -10,6 +10,7 @@ import {
   transcriptFor,
   visibleStreamText,
 } from "@/lib/llm/parse";
+import { worthRemembering } from "@/lib/memory";
 import type { HistoryEntry } from "@/lib/types";
 
 describe("interviewer JSON parsing (LLM provider hardening)", () => {
@@ -262,5 +263,29 @@ describe("silence is not an answer", () => {
     expect(isNoAnswer("  (no answer)\n")).toBe(true);
     expect(isNoAnswer("no answer")).toBe(false);
     expect(isNoAnswer("I have no answer for that")).toBe(false);
+  });
+});
+
+describe("what is worth remembering about a candidate", () => {
+  // The store filled with things like "before I answer — what would I actually
+  // be doing day to day in this role?" recorded as a fact about the candidate.
+  // Only what they say about THEMSELVES is memory.
+  it("stores answers but not the candidate's own questions", () => {
+    expect(worthRemembering("I built an e-commerce site with Spring Boot and handled concurrent orders.")).toBe(true);
+    expect(worthRemembering("before I answer — what would I actually be doing day to day in this role?")).toBe(false);
+    expect(worthRemembering("Is there a mentor for freshers, and what do the first months look like?")).toBe(false);
+  });
+
+  it("ignores chatter too short to be a fact", () => {
+    expect(worthRemembering("yes")).toBe(false);
+    expect(worthRemembering("I think so, probably")).toBe(false);
+  });
+
+  it("keeps a long answer that happens to end on a rhetorical question", () => {
+    const long =
+      "I chose Postgres because we needed real transactions across the orders and stock tables, " +
+      "and Mongo would have meant writing that consistency by hand, which for a payments flow is " +
+      "exactly the code you do not want to own yourself, right?";
+    expect(worthRemembering(long)).toBe(true);
   });
 });
