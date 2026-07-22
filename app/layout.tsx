@@ -1,5 +1,20 @@
 import type { Metadata } from "next";
+import { Newsreader, Schibsted_Grotesk } from "next/font/google";
+import { AppHeader } from "@/components/AppHeader";
 import "./globals.css";
+
+const fontUi = Schibsted_Grotesk({
+  subsets: ["latin"],
+  variable: "--font-ui",
+  display: "swap",
+});
+
+const fontDisplay = Newsreader({
+  subsets: ["latin"],
+  style: ["normal", "italic"],
+  variable: "--font-display",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Placement Day Simulator",
@@ -9,8 +24,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    <html lang="en" className={`${fontUi.variable} ${fontDisplay.variable}`}>
+      <body>
+        <AppHeader />
+        {children}
+      </body>
     </html>
   );
 }

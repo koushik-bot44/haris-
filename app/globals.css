@@ -1,31 +1,63 @@
-/* Light studio theme (user direction, 2026-07-22): white, simple, great —
-   ElevenLabs-family design language executed originally. Near-monochrome ink
-   on white, hairline borders, pill buttons, one red reserved for "recording".
-   Every color is a token; the previous dark-room palette lives in git history. */
+/* Light studio system (redesign 2026-07-22): ElevenLabs-family language —
+   porcelain white, ink, hairline borders, pill buttons, one recording red.
+   The orb is the only living color; every other surface stays quiet.
+   Fonts are loaded in app/layout.tsx via next/font and exposed as
+   --font-ui (Schibsted Grotesk) and --font-display (Newsreader). */
 
 :root {
-  --bg: #ffffff;
-  --surface: #fafafa;
-  --surface-raised: #ffffff;
-  --border: #e8e8e6;
-  --text: #16161a;
-  --muted: #6f6f76;
-  --accent: #16161a; /* ink — buttons and emphasis are black, not colored */
-  --accent-ink: #ffffff;
-  --live: #d6493f; /* recording red — the only loud color in the system */
-  --ok: #3d8f5f;
+  /* Neutrals — chroma-0 porcelain, cool-tinted panel layer. */
+  --bg: oklch(99.3% 0 0);
+  --surface: oklch(97.6% 0.002 260);
+  --surface-2: oklch(96.2% 0.005 260);
+  --surface-raised: oklch(100% 0 0);
+  --border: oklch(92.5% 0.003 260);
+  --border-strong: oklch(85% 0.005 260);
+  --text: oklch(20% 0.012 270);
+  --muted: oklch(48% 0.014 270);
 
-  --font-display: Georgia, "Times New Roman", serif;
-  --font-ui: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* Ink is the accent — actions are black, never colored. */
+  --accent: oklch(20% 0.012 270);
+  --accent-hover: oklch(30% 0.014 270);
+  --accent-ink: oklch(99.5% 0 0);
 
+  /* The two loud colors in the whole system. */
+  --live: oklch(56% 0.185 28); /* recording red */
+  --live-soft: oklch(96.5% 0.02 28);
+  --ok: oklch(55% 0.115 155);
+  --ok-soft: oklch(96.5% 0.025 155);
+
+  /* Criterion palette — the only data colors (charts, dots, trend lines). */
+  --c-relevance: oklch(68% 0.115 70);
+  --c-structure: oklch(62% 0.1 150);
+  --c-depth: oklch(62% 0.09 250);
+  --c-communication: oklch(62% 0.09 330);
+
+  --radius-sm: 8px;
   --radius: 12px;
+  --radius-lg: 16px;
   --radius-pill: 999px;
-  --shadow-soft: 0 1px 2px rgba(22, 22, 26, 0.04), 0 8px 24px rgba(22, 22, 26, 0.05);
+
+  /* Depth: hairline OR shadow — never a 1px border under a wide soft shadow. */
+  --shadow-raised: 0 1px 2px oklch(20% 0.01 270 / 0.06), 0 4px 8px oklch(20% 0.01 270 / 0.06);
+
   --space-1: 6px;
   --space-2: 12px;
   --space-3: 20px;
   --space-4: 32px;
   --space-5: 52px;
+  --space-6: 84px;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --t-fast: 150ms;
+  --t-med: 220ms;
+
+  /* Semantic stack: dropdown < sticky < backdrop < modal < toast < tooltip */
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-backdrop: 300;
+  --z-modal: 400;
+  --z-toast: 500;
+  --z-tooltip: 600;
 }
 
 * {
@@ -38,34 +70,45 @@ body {
   padding: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: var(--font-ui);
+  font-family: var(--font-ui, system-ui, sans-serif);
   font-size: 16px;
-  line-height: 1.6;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
 }
 
+/* Type scale — fixed rem, product register. Display face carries the humane
+   moments: page titles, the interviewer's words, verdicts, pull-quotes. */
 h1,
 h2,
 h3 {
-  font-family: var(--font-display);
-  font-weight: 600;
-  line-height: 1.2;
+  font-family: var(--font-display, Georgia, serif);
+  font-weight: 500;
+  line-height: 1.15;
   text-wrap: balance;
   margin: 0 0 var(--space-2);
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
 }
-
 h1 {
-  font-size: 2rem;
+  font-size: 2.25rem;
 }
 h2 {
-  font-size: 1.4rem;
+  font-size: 1.5rem;
+}
+h3 {
+  font-size: 1.17rem;
+}
+
+p {
+  max-width: 72ch;
 }
 
 a {
   color: var(--text);
+  text-underline-offset: 3px;
+  transition: color var(--t-fast) var(--ease-out);
 }
 a:hover {
-  opacity: 0.7;
+  color: var(--muted);
 }
 
 button {
@@ -76,21 +119,34 @@ button {
 :focus-visible {
   outline: 2px solid var(--text);
   outline-offset: 2px;
+  border-radius: 2px;
 }
 
+/* ——— Buttons ——— */
+a.btn {
+  text-decoration: none;
+}
 .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   background: var(--accent);
   color: var(--accent-ink);
   border: 1px solid var(--accent);
   border-radius: var(--radius-pill);
-  padding: 12px 24px;
+  padding: 12px 26px;
   font-weight: 600;
   font-size: 0.95rem;
   min-height: 44px;
-  transition: transform 0.08s ease, opacity 0.15s ease;
+  transition:
+    background var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out),
+    transform 80ms var(--ease-out);
 }
 .btn:hover {
-  opacity: 0.85;
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 .btn:active {
   transform: scale(0.98);
@@ -98,62 +154,198 @@ button {
 .btn.secondary {
   background: transparent;
   color: var(--text);
-  border: 1px solid #d9d9d6;
+  border-color: var(--border-strong);
 }
 .btn.secondary:hover {
   background: var(--surface);
-  opacity: 1;
+  border-color: var(--border-strong);
+}
+.btn.quiet {
+  background: transparent;
+  color: var(--muted);
+  border-color: transparent;
+  padding-inline: 14px;
+}
+.btn.quiet:hover {
+  color: var(--text);
+  background: var(--surface);
 }
 .btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+  transform: none;
 }
 
+/* ——— Forms ——— */
 .field {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
 }
 .field label {
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.field .hint {
+  font-size: 0.8rem;
   color: var(--muted);
 }
 .field input,
 .field select,
 .field textarea {
+  /* Fill the field and shrink with it — a text input's intrinsic width must
+     not force page-level horizontal scroll on narrow screens. */
+  width: 100%;
+  min-width: 0;
   background: var(--surface-raised);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 11px 14px;
   font: inherit;
+  transition: border-color var(--t-fast) var(--ease-out), box-shadow var(--t-fast) var(--ease-out);
+}
+.field input::placeholder,
+.field textarea::placeholder {
+  color: var(--muted);
 }
 .field input:focus,
 .field select:focus,
 .field textarea:focus {
-  border-color: #b9b9b4;
+  border-color: var(--text);
   outline: none;
+  box-shadow: 0 0 0 1px var(--text);
+}
+.field select {
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1.5 6 6.5 11 1.5' fill='none' stroke='%2316161a' stroke-width='1.6' stroke-linecap='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  padding-right: 38px;
 }
 
+/* Selectable option cards — round picker, voice picker. One vocabulary. */
+.choice {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+.choice:hover {
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+.choice[aria-checked="true"],
+.choice[aria-pressed="true"] {
+  border-color: var(--text);
+  box-shadow: 0 0 0 1px var(--text);
+}
+.choice .choice-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.choice .choice-desc {
+  font-size: 0.83rem;
+  color: var(--muted);
+}
+.choice:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ——— Surfaces ——— */
 .card {
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--space-3);
-  box-shadow: var(--shadow-soft);
+}
+.card.raised {
+  border: none;
+  box-shadow: var(--shadow-raised);
+  border-radius: var(--radius-lg);
+}
+.card.tinted {
+  background: var(--surface);
+  border-color: var(--border);
 }
 
+.divider {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: var(--space-4) 0;
+}
+
+/* ——— Text utilities ——— */
 .muted {
   color: var(--muted);
 }
 .small {
   font-size: 0.85rem;
 }
-
 .mono-num {
   font-variant-numeric: tabular-nums;
+}
+.display {
+  font-family: var(--font-display, Georgia, serif);
+}
+
+/* Status chip — engine/state badges. Quiet by default. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+.chip .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border-strong);
+  flex-shrink: 0;
+}
+.chip.on .dot {
+  background: var(--ok);
+}
+.chip.live {
+  color: var(--live);
+  background: var(--live-soft);
+  border-color: transparent;
+}
+.chip.live .dot {
+  background: var(--live);
+}
+
+/* Keyboard key hint (SPACE, Enter). */
+kbd {
+  font-family: var(--font-ui, sans-serif);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 2px 7px;
 }
 
 /* Persona identity chip — quiet ink circle; the orb carries the life. */
@@ -167,7 +359,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-family: var(--font-display);
+  font-family: var(--font-display, Georgia, serif);
   font-size: 1.5rem;
   flex-shrink: 0;
 }
@@ -177,10 +369,10 @@ button {
 @keyframes monopulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(22, 22, 26, 0.12);
+    box-shadow: 0 0 0 0 oklch(20% 0.01 270 / 0.12);
   }
   50% {
-    box-shadow: 0 0 0 9px rgba(22, 22, 26, 0);
+    box-shadow: 0 0 0 9px oklch(20% 0.01 270 / 0);
   }
 }
 
@@ -193,7 +385,7 @@ button {
 }
 .level span {
   width: 4px;
-  background: var(--border);
+  background: var(--border-strong);
   height: 6px;
   border-radius: 2px;
 }
@@ -220,10 +412,52 @@ button {
   }
 }
 
+/* Phase-panel entrance — state change, one panel at a time, no orchestration. */
+.panel-enter {
+  animation: panelIn var(--t-med) var(--ease-out);
+}
+@keyframes panelIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Editorial pull-quote — the candidate's own words as evidence. */
+.pullquote {
+  font-family: var(--font-display, Georgia, serif);
+  font-size: 1.05rem;
+  font-style: italic;
+  line-height: 1.5;
+  color: var(--text);
+  border: 0;
+  margin: var(--space-2) 0;
+  padding: 0 0 0 var(--space-3);
+  position: relative;
+}
+.pullquote::before {
+  content: "“";
+  position: absolute;
+  left: 0;
+  top: -2px;
+  font-size: 1.6rem;
+  color: var(--border-strong);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .monogram.speaking,
   .level.active span {
     animation: none;
+  }
+  .panel-enter {
+    animation-duration: 1ms;
+  }
+  * {
+    transition-duration: 1ms !important;
   }
 }
 
@@ -231,6 +465,9 @@ button {
   max-width: 720px;
   margin: 0 auto;
   padding: var(--space-4) var(--space-3) var(--space-5);
+}
+.wrap.wide {
+  max-width: 880px;
 }
 
 table.plain {
@@ -240,11 +477,87 @@ table.plain {
 table.plain td,
 table.plain th {
   border-bottom: 1px solid var(--border);
-  padding: 8px 10px;
+  padding: 10px 10px;
   text-align: left;
   font-size: 0.9rem;
+}
+table.plain th {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
 }
 
 blockquote {
   color: var(--text);
+}
+
+/* ——— App shell ——— */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: oklch(99.3% 0 0 / 0.88);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+.app-header .inner {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 0 var(--space-3);
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.wordmark {
+  font-family: var(--font-display, Georgia, serif);
+  font-size: 1.06rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.wordmark:hover {
+  color: var(--text);
+  opacity: 0.75;
+}
+.app-nav {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  /* Narrow screens: the nav scrolls inside the header (scrollbar hidden)
+     instead of forcing page-level horizontal scroll. */
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.app-nav::-webkit-scrollbar {
+  display: none;
+}
+.app-nav a {
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  transition: color var(--t-fast) var(--ease-out), background var(--t-fast) var(--ease-out);
+}
+.app-nav a:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+.app-nav a[aria-current="page"] {
+  color: var(--text);
+  background: var(--surface-2);
+}
+@media (max-width: 600px) {
+  .app-header .inner {
+    gap: var(--space-2);
+    padding: 0 var(--space-2);
+  }
+  .app-nav a {
+    padding: 6px 9px;
+  }
 }

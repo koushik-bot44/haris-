@@ -1,13 +1,38 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useState, type CSSProperties } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useInterviewMachine } from "@/hooks/useInterviewMachine";
 import { VoiceOrb } from "@/components/VoiceOrb";
+import { ScoreVerdict } from "@/components/report/ScoreVerdict";
+import { DeliveryRow } from "@/components/report/DeliveryRow";
+import { QuestionCard } from "@/components/report/QuestionCard";
+import { TurnTimeline } from "@/components/report/TurnTimeline";
+import { getVoiceEngine, lastEngineUsed, type VoiceEngine } from "@/lib/tts";
 import type { RolePreset } from "@/lib/types";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
+
+// The interviewer's spoken words are the humane moment — they render in the
+// display serif, large, centered. Everything else stays quiet UI sans.
+const captionStyle: CSSProperties = {
+  fontFamily: "var(--font-display)",
+  fontSize: "1.35rem",
+  lineHeight: 1.4,
+  textWrap: "balance",
+  margin: "0 auto",
+  maxWidth: "60ch",
+  textAlign: "center",
+};
+
+const ENGINE_LABEL: Record<VoiceEngine, string> = {
+  chatterbox: "Studio voice",
+  elevenlabs: "Cloud voice",
+  kokoro: "On-device voice",
+  system: "System voice",
+};
 
 export default function InterviewPage() {
   return (
@@ -36,6 +61,13 @@ function InterviewRoom() {
   const m = useInterviewMachine(name, role, round, resume);
   const [textDraft, setTextDraft] = useState("");
   const [codeDraft, setCodeDraft] = useState("");
+  // Engine label is read after mount — localStorage is a client-only source.
+  // Re-read on every phase change so the chip reflects the engine that
+  // ACTUALLY spoke (fallbacks show truthfully), not just the stored choice.
+  const [engine, setEngine] = useState<VoiceEngine | null>(null);
+  useEffect(() => {
+    setEngine(lastEngineUsed() ?? getVoiceEngine());
+  }, [m.phase]);
 
   // Fresh starter code whenever a coding turn begins.
   useEffect(() => {
@@ -84,29 +116,66 @@ function InterviewRoom() {
     router.push("/");
   };
 
+  const live = m.phase === "thinking" || m.phase === "speaking" || m.phase === "listening";
+  const roundLabel = round === "technical" ? "Technical round" : "HR round";
+
   return (
     <main className="wrap">
-      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, marginBottom: 12 }}>
-        <div className="small muted mono-num">
-          {m.questionIndex > 0 && m.phase !== "done" ? `Question ${m.questionIndex} of 5` : ""}
+      {/* Minimal room chrome — the global header stays out of the room. */}
+      <header
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: "var(--space-4)",
+          flexWrap: "wrap",
+        }}
+      >
+        <div className="small mono-num" style={{ fontWeight: 600 }}>
+          {m.questionIndex > 0 && m.phase !== "done" ? (
+            <>
+              Question {m.questionIndex} of 5
+              {m.codingTurn && <span className="muted"> · coding</span>}
+            </>
+          ) : (
+            roundLabel
+          )}
         </div>
-        <button className="btn secondary" onClick={leave}>
-          Leave
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className={m.textMode ? "chip" : "chip on"}>
+            <span className="dot" />
+            {m.textMode ? "Text mode" : engine ? ENGINE_LABEL[engine] : "Voice"}
+          </span>
+          <button className="btn quiet" onClick={leave}>
+            Leave
+          </button>
+        </div>
       </header>
 
-      {/* The voice orb — center stage while the conversation is live. Glows and
-          morphs from real audio: your mic while you speak, her playback while
-          she does. */}
-      {["thinking", "speaking", "listening"].includes(m.phase) && !m.codingTurn && (
-        <div style={{ display: "flex", justifyContent: "center", margin: "4px 0 8px" }}>
-          <VoiceOrb size={250} />
+      {/* The stage: the orb is the only living color, centered with room to
+          breathe; the persona identity sits quietly beneath it. */}
+      {live && !m.codingTurn && (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 12,
+            margin: "var(--space-4) 0 var(--space-3)",
+          }}
+        >
+          <VoiceOrb size={240} />
+          <div style={{ textAlign: "center" }}>
+            <div className="small" style={{ fontWeight: 600 }}>{m.persona.name}</div>
+            <div className="small muted">{m.persona.title}</div>
+          </div>
         </div>
       )}
 
       {m.phase === "micCheck" && <MicCheck m={m} />}
       {m.phase === "preroll" && <Preroll m={m} />}
-      {(m.phase === "thinking" || m.phase === "speaking" || m.phase === "listening") && (
+      {live && (
         <Live
           m={m}
           textDraft={textDraft}
@@ -115,13 +184,29 @@ function InterviewRoom() {
           setCodeDraft={setCodeDraft}
         />
       )}
+      {/* Quota/error message from the machine — friendly text, and no
+          "Try again" (retrying a spent quota only burns the user's time). */}
+      {m.error && m.phase !== "connectionLost" && m.phase !== "done" && (
+        <div className="card tinted" role="status" style={{ margin: "var(--space-3) 0" }}>
+          <p className="small" style={{ margin: 0 }}>{m.error}</p>
+        </div>
+      )}
       {m.phase === "connectionLost" && (
-        <section className="card" role="alert">
-          <h2>The interviewer lost connection</h2>
-          <p className="muted">Your answers are safe. You can try again — the round continues where it left off.</p>
-          <button className="btn" onClick={m.retryConnection}>
-            Try again
-          </button>
+        <section className="card panel-enter" role="alert">
+          {m.error ? (
+            <>
+              <h2>The interviewer is out of capacity</h2>
+              <p className="muted">{m.error}</p>
+            </>
+          ) : (
+            <>
+              <h2>The interviewer lost connection</h2>
+              <p className="muted">Your answers are safe. You can try again — the round continues where it left off.</p>
+              <button className="btn" onClick={m.retryConnection}>
+                Try again
+              </button>
+            </>
+          )}
         </section>
       )}
       {m.phase === "done" && <Summary m={m} />}
@@ -135,9 +220,11 @@ function InterviewRoom() {
         {m.phase === "done" && "Round complete. Your results are shown."}
       </div>
 
-      <p className="small muted" style={{ marginTop: 40 }}>
-        Keep this tab active during the interview — browsers pause speech in background tabs.
-      </p>
+      {m.phase !== "done" && (
+        <p className="small muted" style={{ marginTop: "var(--space-5)", textAlign: "center" }}>
+          Keep this tab active during the interview — browsers pause speech in background tabs.
+        </p>
+      )}
     </main>
   );
 }
@@ -179,7 +266,7 @@ function MicCheck({ m }: { m: M }) {
   const started = m.micCheckTranscript.length > 0 || m.hearing;
   const whisper = useWhisperBadge(m.textMode);
   return (
-    <section className="card">
+    <section className="card panel-enter">
       <h2>Quick mic check</h2>
       {!m.textMode ? (
         <>
@@ -198,7 +285,10 @@ function MicCheck({ m }: { m: M }) {
           </div>
           {m.micCheckTranscript && (
             <p style={{ marginTop: 16 }}>
-              Heard: <strong>“{m.micCheckTranscript}”</strong>
+              <span className="small muted">Heard</span>{" "}
+              <span className="display" style={{ fontStyle: "italic", fontSize: "1.1rem" }}>
+                “{m.micCheckTranscript}”
+              </span>
             </p>
           )}
           <div style={{ display: "flex", gap: 12, marginTop: 16, flexWrap: "wrap" }}>
@@ -250,7 +340,7 @@ function MicCheck({ m }: { m: M }) {
 function Preroll({ m }: { m: M }) {
   const first = m.persona.name.split(" ")[0];
   return (
-    <section className="card">
+    <section className="card panel-enter">
       <h2>Before we start</h2>
       <p>
         {first} will ask <strong>5 questions — about 10 minutes</strong>.
@@ -296,31 +386,52 @@ function Live({
     m.submitTextAnswer(codeDraft);
     setCodeDraft("");
   };
+  const first = m.persona.name.split(" ")[0];
 
   return (
-    <section>
-      {/* Captions: the interviewer's words always render (a11y + noisy rooms). */}
-      <div className="card" aria-live="polite" style={{ minHeight: 96 }}>
+    <section style={{ textAlign: "center" }}>
+      {/* Captions: the interviewer's words always render (a11y + noisy rooms).
+          They are the star of the screen — display serif, large, centered. */}
+      <div
+        aria-live="polite"
+        style={{
+          minHeight: 104,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
         {m.phase === "thinking" ? (
-          <p className="muted" style={{ margin: 0 }}>
-            {m.persona.name.split(" ")[0]} is thinking…
-          </p>
+          <span className="chip">{first} is thinking…</span>
         ) : (
-          <p style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: "1.15rem" }}>{m.caption}</p>
+          <p style={captionStyle}>{m.caption}</p>
         )}
       </div>
 
       {/* Coding turn: the editor IS the answer surface (technical round Q3). */}
       {m.codingTurn && m.phase === "listening" && (
-        <div style={{ marginTop: 20, display: "grid", gap: 12 }}>
-          <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden" }}>
+        <div className="panel-enter" style={{ marginTop: "var(--space-3)", display: "grid", gap: 12, textAlign: "left" }}>
+          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                padding: "10px 16px",
+                borderBottom: "1px solid var(--border)",
+              }}
+            >
+              <span className="small" style={{ fontWeight: 600 }}>Hands-on question</span>
+              <span className="chip">{m.codingQuestion.language}</span>
+            </div>
             <MonacoEditor
               height="320px"
               language={m.codingQuestion.language}
-              theme="light"
+              theme="vs"
               value={codeDraft}
               onChange={(v) => setCodeDraft(v ?? "")}
-              options={{ minimap: { enabled: false }, fontSize: 14, scrollBeyondLastLine: false }}
+              options={{ fontSize: 13, minimap: { enabled: false }, scrollBeyondLastLine: false, padding: { top: 12 } }}
             />
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
@@ -334,37 +445,58 @@ function Live({
         </div>
       )}
 
+      {/* One visual per state: speaking = a quiet open-door hint. */}
       {m.phase === "speaking" && !m.textMode && (
-        <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-          <span className={`level ${m.hearing ? "active" : ""}`} aria-hidden>
-            <span /><span /><span /><span />
-          </span>
-          <span className="small muted">mic is live — jump in anytime</span>
-        </div>
+        <p className="small muted" style={{ marginTop: "var(--space-3)" }}>
+          mic is live — jump in anytime
+        </p>
       )}
 
+      {/* Listening = level bars + the one recording-red chip. */}
       {m.phase === "listening" && !m.textMode && !m.codingTurn && (
-        <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-          <span className={`level ${m.hearing ? "active" : ""}`} aria-hidden>
-            <span /><span /><span /><span />
-          </span>
-          <span style={{ color: "var(--live)", fontSize: "1.05rem", fontWeight: 600 }}>
-            Your turn — speaking
-          </span>
-          <button className="btn secondary" data-end-answer="true" onClick={m.endAnswerNow}>
-            I'm done answering (Enter)
-          </button>
+        <div
+          className="panel-enter"
+          style={{
+            marginTop: "var(--space-3)",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 14,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span className={`level ${m.hearing ? "active" : ""}`} aria-hidden>
+              <span /><span /><span /><span />
+            </span>
+            <span className="chip live">
+              <span className="dot" />
+              Your turn — speak
+            </span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
+            <button className="btn secondary" data-end-answer="true" onClick={m.endAnswerNow}>
+              I'm done answering
+            </button>
+            <span className="small muted">
+              or press <kbd>Enter</kbd>
+            </span>
+          </div>
         </div>
       )}
 
+      {/* Low-emphasis proof of hearing — the last finalized sentence. */}
       {m.phase === "listening" && !m.textMode && m.lastSentence && (
         <p className="small muted" style={{ marginTop: 12 }}>
           …{m.lastSentence}
         </p>
       )}
 
+      {/* Text mode: first-class, same identity — the answer just arrives typed. */}
       {m.phase === "listening" && m.textMode && !m.codingTurn && (
-        <div style={{ marginTop: 20 }} className="field">
+        <div
+          className="field panel-enter"
+          style={{ marginTop: "var(--space-3)", textAlign: "left", maxWidth: 560, marginInline: "auto" }}
+        >
           <label htmlFor="answer">Type your answer</label>
           <textarea
             id="answer"
@@ -375,11 +507,14 @@ function Live({
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitText();
             }}
           />
-          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
             <button className="btn" onClick={submitText} disabled={!textDraft.trim()}>
               Submit answer
             </button>
-            <button className="btn secondary" onClick={m.retryVoice}>
+            <span className="small muted">
+              <kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Enter</kbd>
+            </span>
+            <button className="btn quiet" onClick={m.retryVoice}>
               Try voice again
             </button>
           </div>
@@ -387,49 +522,13 @@ function Live({
       )}
 
       {m.latencies.length > 0 && (
-        <p className="small muted mono-num" style={{ marginTop: 24 }}>
-          Interviewer response latency: last {m.latencies[m.latencies.length - 1]} ms · avg {m.avgLatencyMs} ms
+        <p className="small muted mono-num" style={{ marginTop: "var(--space-4)" }}>
+          Interviewer response latency: last {m.latencies[m.latencies.length - 1]} ms
+          {m.instantFlags[m.latencies.length - 1] && " · ⚡ instant"} · avg {m.avgLatencyMs} ms
           (target ≤ 2000 ms; streaming lands next)
         </p>
       )}
     </section>
-  );
-}
-
-const CRITERIA_ORDER = ["relevance", "structure", "depth", "communication"] as const;
-const CRITERION_LABEL: Record<string, string> = {
-  relevance: "Relevance",
-  structure: "Structure",
-  depth: "Depth",
-  communication: "Communication",
-};
-
-function QuestionBlock({ entry }: { entry: NonNullable<M["session"]>["perQuestionScores"][number] }) {
-  // Coach ordering: strongest criterion first, weakest last — never a list of failures.
-  const ordered = [...CRITERIA_ORDER].sort((a, b) => entry.scores[b] - entry.scores[a]);
-  const avg = (entry.scores.relevance + entry.scores.structure + entry.scores.depth + entry.scores.communication) / 4;
-  return (
-    <div className="card" style={{ borderLeft: "3px solid var(--accent)" }}>
-      <div className="small muted">Question {entry.questionId} · {avg.toFixed(1)}/5</div>
-      <p style={{ margin: "4px 0 10px", fontFamily: "var(--font-display)" }}>{entry.question}</p>
-      <div style={{ display: "grid", gap: 10 }}>
-        {ordered.map((c) => (
-          <div key={c}>
-            <div className="small mono-num">
-              <strong>{CRITERION_LABEL[c]}</strong> {entry.scores[c]}/5
-            </div>
-            {entry.evidence[c] && (
-              <blockquote
-                style={{ margin: "4px 0", padding: "6px 12px", borderLeft: "2px solid var(--border)", fontFamily: "var(--font-display)", fontSize: "0.98rem" }}
-              >
-                “{entry.evidence[c]}” <span className="small muted">— you</span>
-              </blockquote>
-            )}
-            {entry.tips[c] && <div className="small muted">{entry.tips[c]}</div>}
-          </div>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -438,10 +537,6 @@ function Summary({ m }: { m: M }) {
   if (!s) return null;
   // Live scores may trail the saved session (background stragglers) — prefer the richer set.
   const entries = m.scores.length >= s.perQuestionScores.length ? m.scores : s.perQuestionScores;
-  const avg =
-    entries.length > 0
-      ? entries.reduce((a, e) => a + (e.scores.relevance + e.scores.structure + e.scores.depth + e.scores.communication) / 4, 0) / entries.length
-      : null;
 
   const downloadTrace = () => {
     const blob = new Blob([JSON.stringify(s, null, 2)], { type: "application/json" });
@@ -454,93 +549,54 @@ function Summary({ m }: { m: M }) {
   };
 
   return (
-    <section>
+    <section className="panel-enter">
       <h2>Round complete</h2>
 
-      {/* FIRST: the verdict — score + one strength + one priority fix, large. */}
-      {avg !== null ? (
-        <div className="card" style={{ margin: "12px 0", borderLeft: "3px solid var(--accent)" }}>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: "2.4rem", lineHeight: 1 }} className="mono-num">
-            {avg.toFixed(1)}<span className="muted" style={{ fontSize: "1.2rem" }}>/5</span>
-          </div>
-          <p style={{ margin: "8px 0 0" }}>{s.overall.summary}</p>
-        </div>
-      ) : (
-        <p className="muted">
-          Answers were too short to score this round — aim for 30+ seconds per answer. Transcript and
-          delivery numbers below.
-        </p>
-      )}
+      {/* FIRST: the verdict — score + coach summary. ScoreVerdict raises its
+          own card; wrapping it in another one double-stacks the chrome. */}
+      <ScoreVerdict entries={entries} summary={s.overall.summary} />
 
       {!m.sessionPersisted && (
-        <div className="card" role="status" style={{ borderLeft: "3px solid var(--live)", margin: "12px 0" }}>
-          This device can't store sessions (private browsing?) — <strong>download the JSON below</strong> to
-          keep this round; it disappears when the tab closes.
+        <div className="card tinted" role="status" style={{ margin: "0 0 var(--space-4)" }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Couldn't save</div>
+          <div className="small">
+            This device can't store sessions (private browsing?) — download the JSON below to keep this
+            round; it disappears when the tab closes.
+          </div>
         </div>
       )}
 
-      {s.deliveryMetrics && (
-        <div className="card" style={{ margin: "16px 0" }}>
-          <table className="plain mono-num" aria-label="Delivery metrics">
-            <tbody>
-              <tr>
-                <td>Speaking pace</td>
-                <td>{s.deliveryMetrics.wpm > 0 ? `${s.deliveryMetrics.wpm} words/min` : "not enough voice signal"}</td>
-              </tr>
-              <tr>
-                <td>Lexical fillers (“basically”, “like”…)</td>
-                <td>{s.deliveryMetrics.fillerCount}</td>
-              </tr>
-              <tr>
-                <td>Hesitations (pauses &gt;1.1s)</td>
-                <td>{s.deliveryMetrics.hesitationCount}</td>
-              </tr>
-              <tr>
-                <td>Longest pause</td>
-                <td>{(s.deliveryMetrics.longestPauseMs / 1000).toFixed(1)}s</td>
-              </tr>
-              {s.latency.avgMs !== null && (
-                <tr>
-                  <td>Avg interviewer latency</td>
-                  <td>{s.latency.avgMs} ms</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* SECOND: delivery — one quiet row of numbers. */}
+      <DeliveryRow session={s} />
 
-      {/* THIRD: per-question blocks — strongest criterion first, evidence as
+      {/* THIRD: per-question cards — strongest criterion first, evidence as
           pull-quotes from the candidate's own (verified) words. */}
       {entries.length > 0 && (
-        <div style={{ display: "grid", gap: 12, margin: "20px 0" }}>
+        <div style={{ display: "grid", gap: "var(--space-4)", margin: "var(--space-4) 0" }}>
           {entries.map((e) => (
-            <QuestionBlock key={e.questionId} entry={e} />
+            <QuestionCard key={e.questionId} entry={e} />
           ))}
         </div>
       )}
 
-      {/* Transcript on a vertical turn timeline — the spine the replay page
-          (M5) adds its scrubber to. Same route, same layout skeleton. */}
-      <div style={{ display: "grid", gap: 12, margin: "20px 0" }}>
-        {s.turns.map((t, i) => (
-          <div key={i} className="card" style={{ borderLeft: `3px solid ${t.speaker === "interviewer" ? "var(--accent)" : "var(--border)"}` }}>
-            <div className="small muted">
-              {t.speaker === "interviewer" ? "Priya" : "You"} ·{" "}
-              <span className="mono-num">{new Date(t.tStart).toLocaleTimeString()}</span>
-            </div>
-            <p style={{ margin: "4px 0 0" }}>{t.text}</p>
-          </div>
-        ))}
+      {/* LAST: transcript on the shared turn timeline — the same spine the
+          replay page (/report/[id]) adds its scrubber to. */}
+      <div style={{ margin: "var(--space-4) 0" }}>
+        <TurnTimeline session={s} />
       </div>
 
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <a className="btn" href="/">
-          Practice again
-        </a>
-        <button className="btn secondary" onClick={downloadTrace}>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+        {m.sessionPersisted && (
+          <Link className="btn" href={`/report/${s._id}`} style={{ textDecoration: "none" }}>
+            View full report →
+          </Link>
+        )}
+        <button className={m.sessionPersisted ? "btn secondary" : "btn"} onClick={downloadTrace}>
           Download session JSON
         </button>
+        <a className="btn quiet" href="/" style={{ textDecoration: "none" }}>
+          Practice again
+        </a>
       </div>
     </section>
   );
