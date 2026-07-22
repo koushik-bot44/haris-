@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { GD_CAP_MS, useGdMachine } from "@/hooks/useGdMachine";
 import { VoiceOrb } from "@/components/VoiceOrb";
@@ -8,16 +8,7 @@ import { GD_TOPICS } from "@/lib/fixtures/gd-topics";
 import { AIRTIME_BAND } from "@/lib/gd/airtime";
 
 // Speaker words share the interview room's humane treatment: display serif,
-// large, centered. Chrome stays quiet UI sans.
-const captionStyle: CSSProperties = {
-  fontFamily: "var(--font-display)",
-  fontSize: "1.35rem",
-  lineHeight: 1.4,
-  textWrap: "balance",
-  margin: "0 auto",
-  maxWidth: "60ch",
-  textAlign: "center",
-};
+// large, centered (see .caption in globals.css). Chrome stays quiet UI sans.
 
 export default function GdPage() {
   return (
@@ -37,7 +28,7 @@ function GdGate() {
             Group Discussion practice is switched off on this deployment. Remove
             NEXT_PUBLIC_GD_ENABLED=0 to turn it back on.
           </p>
-          <a className="btn" href="/" style={{ textDecoration: "none" }}>
+          <a className="btn" href="/">
             Back to setup
           </a>
         </section>
@@ -81,20 +72,14 @@ function GdSetup({ initialName, onStart }: { initialName: string; onStart: (topi
   return (
     <main className="wrap">
       <h1>Group Discussion room</h1>
-      <p className="muted" style={{ marginTop: 0 }}>
+      <p className="muted gd-lead">
         Three AI candidates debate a topic with distinct voices — you fight for your share of the
         airtime, moderated by Anita. Scored on interjections and airtime.
       </p>
 
-      <section aria-label="Pick a topic" style={{ margin: "var(--space-4) 0" }}>
-        <div className="small" style={{ fontWeight: 600, marginBottom: 10 }}>
-          Topic
-        </div>
-        <div
-          role="radiogroup"
-          aria-label="Discussion topic"
-          style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}
-        >
+      <section aria-label="Pick a topic" className="gd-topics">
+        <div className="field-label">Topic</div>
+        <div role="radiogroup" aria-label="Discussion topic" className="round-grid">
           {GD_TOPICS.map((t) => (
             <button
               key={t.id}
@@ -106,11 +91,11 @@ function GdSetup({ initialName, onStart }: { initialName: string; onStart: (topi
                 setCustom("");
               }}
             >
-              <span className="choice-title" style={{ fontSize: "0.9rem" }}>{t.topic}</span>
+              <span className="choice-title">{t.topic}</span>
             </button>
           ))}
         </div>
-        <div className="field" style={{ marginTop: 16, maxWidth: 520 }}>
+        <div className="field gd-custom">
           <label htmlFor="gd-custom">Or your own topic</label>
           <input
             id="gd-custom"
@@ -122,7 +107,7 @@ function GdSetup({ initialName, onStart }: { initialName: string; onStart: (topi
         </div>
       </section>
 
-      <div style={{ display: "grid", gap: 20, maxWidth: 520 }}>
+      <div className="gd-setup-foot">
         <div className="field">
           <label htmlFor="gd-name">Your name</label>
           <input
@@ -135,11 +120,11 @@ function GdSetup({ initialName, onStart }: { initialName: string; onStart: (topi
           <span className="hint">The moderator uses it.</span>
         </div>
 
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <div className="gd-form-actions">
           <button className="btn" onClick={start}>
             Enter the room
           </button>
-          <a className="btn quiet" href="/" style={{ textDecoration: "none" }}>
+          <a className="btn quiet" href="/">
             Back
           </a>
         </div>
@@ -208,22 +193,11 @@ function GdRoom({ topic, name }: { topic: string; name: string }) {
   return (
     <main className="wrap">
       {/* Minimal room chrome — topic left, timer + leave right. */}
-      <header
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          marginBottom: "var(--space-4)",
-        }}
-      >
-        <div
-          className="small"
-          style={{ fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-        >
+      <header className="room-bar">
+        <div className="room-topic">
           {m.phase !== "done" ? topic : "Discussion complete"}
         </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexShrink: 0 }}>
+        <div className="room-bar-actions">
           {inRoom && <RoomTimer startedAt={m.discussionStartedAt} />}
           <button className="btn quiet" onClick={leave}>
             Leave
@@ -237,7 +211,7 @@ function GdRoom({ topic, name }: { topic: string; name: string }) {
       {m.phase === "done" && <GdScorecard m={m} />}
 
       {/* Screen-reader announcements — phase swaps unmount focused controls. */}
-      <div aria-live="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}>
+      <div aria-live="polite" className="sr-only">
         {m.phase === "preroll" && "Mic check passed. Discussion instructions shown."}
         {m.candidateHasFloor && "You have the floor."}
         {m.phase === "wrapup" && "The moderator is wrapping up."}
@@ -245,7 +219,7 @@ function GdRoom({ topic, name }: { topic: string; name: string }) {
       </div>
 
       {inRoom && (
-        <p className="small muted" style={{ marginTop: "var(--space-5)", textAlign: "center" }}>
+        <p className="small muted room-note">
           Keep this tab active — browsers pause speech in background tabs. Headphones make barge-in seamless.
         </p>
       )}
@@ -281,7 +255,7 @@ function GdMicCheck({ m }: { m: M }) {
             The GD room is voice-only — you literally fight for airtime with your voice. Click below,
             then <strong>say your name</strong> out loud. Nothing is recorded or uploaded.
           </p>
-          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div className="mic-row">
             <button className="btn" onClick={m.beginMicCheck}>
               Enable microphone
             </button>
@@ -290,14 +264,12 @@ function GdMicCheck({ m }: { m: M }) {
             </span>
           </div>
           {m.micCheckTranscript && (
-            <p style={{ marginTop: 16 }}>
+            <p className="heard">
               <span className="small muted">Heard</span>{" "}
-              <span className="display" style={{ fontStyle: "italic", fontSize: "1.1rem" }}>
-                “{m.micCheckTranscript}”
-              </span>
+              <span className="display heard-quote">“{m.micCheckTranscript}”</span>
             </p>
           )}
-          <div style={{ marginTop: 16 }}>
+          <div className="mic-row">
             <button className="btn" onClick={m.confirmMicCheck} disabled={!started}>
               Sounds right — into the room
             </button>
@@ -352,32 +324,13 @@ function RailChip({
   active: boolean;
   children?: ReactNode;
 }) {
-  const activeStyle: CSSProperties = active
-    ? {
-        color: "var(--text)",
-        background: "var(--surface-raised)",
-        borderColor: "var(--border-strong)",
-        transform: "scale(1.06)",
-      }
-    : {};
   return (
-    <span
-      className="chip"
-      style={{
-        transition: "transform var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out)",
-        ...activeStyle,
-      }}
-    >
+    <span className={`chip rail-chip${active ? " active" : ""}`}>
       {children ?? (
         <span
           aria-hidden
-          style={{
-            width: 10,
-            height: 10,
-            borderRadius: "50%",
-            background: hue === null ? "var(--text)" : `hsl(${hue} 55% 62%)`,
-            flexShrink: 0,
-          }}
+          className="rail-dot"
+          style={{ background: hue === null ? "var(--text)" : `hsl(${hue} 55% 62%)` }}
         />
       )}
       {name}
@@ -405,13 +358,13 @@ function Room({ m, spaceDown }: { m: M; spaceDown: boolean }) {
     <section>
       {/* Persona rail: everyone in the room as identity chips. The candidate's
           chip carries the level bars while they hold the floor (mic = live). */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center", marginBottom: "var(--space-3)" }}>
+      <div className="persona-rail">
         {m.personas.map((p) => (
           <RailChip key={p.id} name={p.name} hue={p.hue[0]} active={m.activeSpeaker === p.id} />
         ))}
         {m.candidateHasFloor ? (
           <span className="chip live">
-            <span className="level active" aria-hidden style={{ height: 12, transform: "scale(0.6)", transformOrigin: "center" }}>
+            <span className="level active rail-level" aria-hidden>
               <span /><span /><span /><span />
             </span>
             You
@@ -424,56 +377,42 @@ function Room({ m, spaceDown }: { m: M; spaceDown: boolean }) {
       {/* The stage: the VoiceOrb mounts ONLY for the active debater (same
           logic as before); Anita gets her quiet monogram; the candidate's
           floor time shows the real hearing bars. Fixed height — no jumping. */}
-      <div
-        style={{ height: 136, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "var(--space-2)" }}
-        aria-hidden
-      >
+      <div className="gd-stage" aria-hidden>
         {activeDebater ? (
           <VoiceOrb size={120} hue={activeDebater.hue} />
         ) : m.activeSpeaker === "moderator" ? (
           <span className="monogram speaking">A</span>
         ) : m.candidateHasFloor ? (
-          <span className={`level ${m.hearing ? "active" : ""}`} style={{ transform: "scale(1.7)" }}>
+          <span className={`level ${m.hearing ? "active" : ""} stage-level`}>
             <span /><span /><span /><span />
           </span>
         ) : null}
       </div>
 
       {/* Live caption — always rendered (a11y + noisy rooms). */}
-      <div
-        aria-live="polite"
-        style={{
-          minHeight: 110,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 8,
-          textAlign: "center",
-        }}
-      >
+      <div aria-live="polite" className="caption-shell">
         {m.candidateHasFloor ? (
           <>
             <span className="chip live">
               <span className="dot" />
               You have the floor
             </span>
-            <p className="small muted" style={{ margin: 0 }}>
+            <p className="small muted floor-hint">
               pause or press <kbd>Enter</kbd> to hand it back
             </p>
             {m.lastSentence && (
-              <p className="small muted" style={{ margin: 0 }}>
+              <p className="small muted floor-hint">
                 …{m.lastSentence}
               </p>
             )}
           </>
         ) : m.caption ? (
           <>
-            <div className="small" style={{ fontWeight: 600 }}>{m.caption.speaker}</div>
-            <p style={captionStyle}>{m.caption.text}</p>
+            <div className="caption-speaker">{m.caption.speaker}</div>
+            <p className="caption">{m.caption.text}</p>
           </>
         ) : (
-          <p className="muted" style={{ margin: 0 }}>
+          <p className="muted floor-hint">
             {m.thinking ? "The room takes a breath…" : "…"}
           </p>
         )}
@@ -481,8 +420,8 @@ function Room({ m, spaceDown }: { m: M; spaceDown: boolean }) {
 
       {/* LIVE airtime: one quiet track, the target band tinted --ok underneath,
           your share filled in ink — switching to recording red past the band. */}
-      <div style={{ marginTop: "var(--space-3)" }}>
-        <div className="small" style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+      <div className="airtime">
+        <div className="airtime-head">
           <span className="mono-num">
             <strong>{share}%</strong> <span className="muted">your airtime</span>
             {interjections.length > 0 && (
@@ -494,51 +433,26 @@ function Room({ m, spaceDown }: { m: M; spaceDown: boolean }) {
           <span className="muted mono-num">target {lo}–{hi}%</span>
         </div>
         <div
+          className="airtime-track"
           role="progressbar"
           aria-label="Your share of the airtime"
           aria-valuenow={Math.round(share)}
           aria-valuemin={0}
           aria-valuemax={100}
-          style={{
-            position: "relative",
-            height: 8,
-            marginTop: 8,
-            background: "var(--surface-2)",
-            borderRadius: "var(--radius-pill)",
-            overflow: "hidden",
-          }}
         >
+          <div className="airtime-band" aria-hidden style={{ left: `${lo}%`, width: `${hi - lo}%` }} />
           <div
+            className={`airtime-fill${share > hi ? " over" : ""}`}
             aria-hidden
-            style={{
-              position: "absolute",
-              left: `${lo}%`,
-              width: `${hi - lo}%`,
-              top: 0,
-              bottom: 0,
-              background: "color-mix(in oklab, var(--ok) 22%, transparent)",
-            }}
-          />
-          <div
-            aria-hidden
-            style={{
-              position: "absolute",
-              left: 0,
-              width: `${Math.min(100, share)}%`,
-              top: 0,
-              bottom: 0,
-              background: share > hi ? "var(--live)" : "var(--accent)",
-              borderRadius: "var(--radius-pill)",
-              transition: "width 0.4s var(--ease-out)",
-            }}
+            style={{ width: `${Math.min(100, share)}%` }}
           />
         </div>
       </div>
 
       {/* Floor controls: the SPACE hint doubles as a press/hold target. */}
-      <div style={{ marginTop: "var(--space-3)", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", justifyContent: "center" }}>
+      <div className="floor-controls">
         <button
-          className="btn secondary"
+          className={`btn secondary${floorHot ? " hot" : ""}`}
           data-floor-key="true"
           onMouseDown={m.takeFloor}
           // Keyboard/AT path: Enter/Space and single-click activation grab the
@@ -550,7 +464,6 @@ function Room({ m, spaceDown }: { m: M; spaceDown: boolean }) {
               m.takeFloor();
             }
           }}
-          style={floorHot ? { borderColor: "var(--live)", color: "var(--live)" } : undefined}
         >
           {m.candidateHasFloor ? (
             "You're speaking…"
@@ -572,7 +485,7 @@ function Room({ m, spaceDown }: { m: M; spaceDown: boolean }) {
       </div>
 
       {m.micBlocked && (
-        <div className="card tinted small" style={{ marginTop: 12 }}>
+        <div className="card tinted small mic-trouble">
           <strong>Mic trouble</strong> ({m.micBlocked}) — your words may not be transcribed. Check the
           address-bar mic permission.
         </div>
@@ -580,13 +493,10 @@ function Room({ m, spaceDown }: { m: M; spaceDown: boolean }) {
 
       {/* Low-emphasis transcript rail — speaker names carry the weight. */}
       {m.transcript.length > 0 && (
-        <div
-          ref={railRef}
-          style={{ marginTop: "var(--space-3)", maxHeight: 180, overflowY: "auto", borderTop: "1px solid var(--border)", paddingTop: 10 }}
-        >
+        <div ref={railRef} className="transcript">
           {m.transcript.map((t, i) => (
-            <p key={i} className="small" style={{ margin: "0 0 6px" }}>
-              <span style={{ fontWeight: 600 }}>{t.speaker === "candidate" ? "You" : t.personaName ?? "—"}</span>{" "}
+            <p key={i} className="small transcript-line">
+              <span className="who">{t.speaker === "candidate" ? "You" : t.personaName ?? "—"}</span>{" "}
               <span className="muted">{t.text}</span>
             </p>
           ))}
@@ -609,23 +519,23 @@ function GdScorecard({ m }: { m: M }) {
       <h2>Discussion complete</h2>
 
       {/* FIRST: the verdict — score + coach summary, raised above the page. */}
-      <div className="card raised" style={{ margin: "0 0 var(--space-4)" }}>
-        <div style={{ fontFamily: "var(--font-display)", fontSize: "2.4rem", lineHeight: 1 }} className="mono-num">
+      <div className="card raised verdict">
+        <div className="verdict-score mono-num">
           {s.overall.avgScore !== null ? (
             <>
               {s.overall.avgScore.toFixed(1)}
-              <span className="muted" style={{ fontSize: "1.2rem" }}>/5</span>
+              <span className="unit">/5</span>
             </>
           ) : (
             <span className="muted">—</span>
           )}
         </div>
-        <p style={{ margin: "8px 0 0" }}>{s.overall.summary}</p>
+        <p className="verdict-summary">{s.overall.summary}</p>
       </div>
 
       {!m.sessionPersisted && (
-        <div className="card tinted" role="status" style={{ margin: "0 0 var(--space-4)" }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>Couldn't save</div>
+        <div className="card tinted notice" role="status">
+          <div className="notice-title">Couldn't save</div>
           <div className="small">
             This device can't store sessions (private browsing?) — this round disappears when the tab closes.
           </div>
@@ -633,7 +543,7 @@ function GdScorecard({ m }: { m: M }) {
       )}
 
       {gm && (
-        <div className="card" style={{ margin: "0 0 var(--space-4)" }}>
+        <div className="card notice">
           <table className="plain mono-num" aria-label="Airtime metrics">
             <tbody>
               <tr>
@@ -667,11 +577,11 @@ function GdScorecard({ m }: { m: M }) {
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <a className="btn" href={`/report/${s._id}`} style={{ textDecoration: "none" }}>
+      <div className="gd-form-actions">
+        <a className="btn" href={`/report/${s._id}`}>
           View full report →
         </a>
-        <a className="btn secondary" href="/" style={{ textDecoration: "none" }}>
+        <a className="btn secondary" href="/">
           Practice again
         </a>
       </div>

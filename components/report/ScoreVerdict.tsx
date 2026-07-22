@@ -52,23 +52,14 @@ export function ScoreVerdict({
 function Verdict({ avg, summary }: { avg: number; summary: string }) {
   const shown = useCountUp(avg);
   return (
-    <div className="card raised" style={{ margin: "var(--space-3) 0" }}>
-      <div
-        className="display mono-num"
-        aria-label={`Overall score ${avg.toFixed(1)} out of 5`}
-        style={{ fontSize: "2.8rem", lineHeight: 1, fontWeight: 500 }}
-      >
+    <div className="card raised r-block r-verdict">
+      <div className="r-verdict-score" aria-label={`Overall score ${avg.toFixed(1)} out of 5`}>
         <span aria-hidden>{shown.toFixed(1)}</span>
-        <span aria-hidden className="muted" style={{ fontSize: "1.2rem" }}>
+        <span aria-hidden className="r-verdict-unit">
           /5
         </span>
       </div>
-      <p
-        className="display"
-        style={{ margin: "10px 0 0", fontStyle: "italic", fontSize: "1.05rem", lineHeight: 1.5 }}
-      >
-        {summary}
-      </p>
+      <p className="r-verdict-summary">{summary}</p>
     </div>
   );
 }

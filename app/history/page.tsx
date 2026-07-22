@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import { loadSessions } from "@/lib/session-store";
 import { questionDenominator, roundLabel, scoreDots, sessionAvg } from "@/lib/report-utils";
 import { EmptyState } from "@/components/ReportNav";
+import { ReportStyles } from "@/components/report/ReportStyles";
 // Uniform ink dots — strength carries the score; color stays reserved for
 // criteria/live/ok. Shared ramp with QuestionCard.
 import { dotOpacity } from "@/components/report/dots";
@@ -26,8 +27,9 @@ export default function HistoryPage() {
 
   return (
     <main className="wrap">
-      <style>{`tr.row-link:hover { background: var(--surface); }`}</style>
-      <h1>Interview history</h1>
+      <ReportStyles />
+      <h1 className="r-title">Interview history</h1>
+      <p className="r-lead tight">Every round on this device, newest first. Each row opens its full report.</p>
       {sessions.length === 0 ? (
         <EmptyState message="No rounds yet — your interviews will list here with per-question score strips." />
       ) : (
@@ -37,7 +39,7 @@ export default function HistoryPage() {
               <th>When</th>
               <th>Round</th>
               <th>Questions</th>
-              <th style={{ textAlign: "right" }}>Avg</th>
+              <th className="r-right">Avg</th>
             </tr>
           </thead>
           <tbody>
@@ -50,8 +52,7 @@ export default function HistoryPage() {
                 // keyboard + assistive-tech access to the same report.
                 <tr
                   key={s._id}
-                  className="row-link"
-                  style={{ cursor: "pointer" }}
+                  className="r-rowlink"
                   onClick={() => router.push(`/report/${s._id}`)}
                 >
                   <td className="mono-num">
@@ -78,27 +79,22 @@ export default function HistoryPage() {
                     {/* role="img": a generic span may not carry aria-label. */}
                     <span
                       role="img"
-                      style={{ display: "inline-flex", gap: 5 }}
+                      className="r-dots"
+                      style={{ gap: 5 }}
                       aria-label={`per-question scores: ${dots.join(", ")}`}
                     >
                       {dots.map((d, i) => (
                         <span
                           key={i}
                           aria-hidden
+                          className="r-dot"
                           title={`Q${i + 1}: ${d}/5`}
-                          style={{
-                            width: 10,
-                            height: 10,
-                            borderRadius: "50%",
-                            background: "var(--text)",
-                            opacity: dotOpacity(d),
-                            display: "inline-block",
-                          }}
+                          style={{ background: "var(--text)", opacity: dotOpacity(d) }}
                         />
                       ))}
                     </span>
                   </td>
-                  <td className="mono-num" style={{ textAlign: "right" }}>
+                  <td className="mono-num r-right">
                     {avg === null ? "—" : `${avg.toFixed(1)}/5`}
                   </td>
                 </tr>

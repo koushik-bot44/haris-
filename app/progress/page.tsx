@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { loadSessions } from "@/lib/session-store";
 import { CRITERIA, CRITERION_LABEL, criterionTrend, roundLabel, sessionAvg, scoredSessions } from "@/lib/report-utils";
 import { EmptyState } from "@/components/ReportNav";
+import { ReportStyles } from "@/components/report/ReportStyles";
 import type { Session } from "@/lib/types";
 
 // Criterion tokens are the only data colors — inline SVG resolves CSS vars
@@ -24,7 +25,7 @@ function TrendChart({ trend }: { trend: ReturnType<typeof criterionTrend> }) {
   // Thin x labels so long histories never overlap; endpoints always shown.
   const labelEvery = Math.max(1, Math.ceil(trend.length / 6));
   return (
-    <div>
+    <div className="card r-block">
       <svg
         viewBox={`0 0 ${W} ${H}`}
         style={{ width: "100%", height: "auto", display: "block" }}
@@ -60,19 +61,10 @@ function TrendChart({ trend }: { trend: ReturnType<typeof criterionTrend> }) {
           );
         })}
       </svg>
-      <div className="small" style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 6 }}>
+      <div className="r-trend-legend">
         {CRITERIA.map((c) => (
-          <span key={c} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span
-              aria-hidden
-              style={{
-                width: 9,
-                height: 9,
-                borderRadius: "50%",
-                background: `var(--c-${c})`,
-                display: "inline-block",
-              }}
-            />
+          <span key={c} className="r-trend-item">
+            <span className="r-swatch" aria-hidden style={{ background: `var(--c-${c})` }} />
             {CRITERION_LABEL[c]}
           </span>
         ))}
@@ -95,7 +87,9 @@ export default function ProgressPage() {
 
   return (
     <main className="wrap">
-      <h1>Progress</h1>
+      <ReportStyles />
+      <h1 className="r-title">Progress</h1>
+      <p className="r-lead tight">How your four scoring criteria move across every scored round.</p>
       {scored.length === 0 ? (
         <EmptyState message="Progress tracking starts with your first scored round." />
       ) : scored.length < 3 ? (
@@ -109,9 +103,7 @@ export default function ProgressPage() {
                 <tr key={s._id}>
                   <td className="mono-num">{new Date(s.startedAt).toLocaleDateString()}</td>
                   <td>{roundLabel(s.roundType)}</td>
-                  <td className="mono-num" style={{ textAlign: "right" }}>
-                    {sessionAvg(s)?.toFixed(1)}/5
-                  </td>
+                  <td className="mono-num r-right">{sessionAvg(s)?.toFixed(1)}/5</td>
                 </tr>
               ))}
             </tbody>

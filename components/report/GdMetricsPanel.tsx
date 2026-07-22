@@ -39,26 +39,23 @@ export function GdMetricsPanel({ session }: { session: Session }) {
   ];
 
   return (
-    <div className="card" style={{ margin: "var(--space-3) 0" }}>
+    <div className="card r-block">
       <h2 style={{ marginBottom: "var(--space-2)", fontSize: "1.17rem" }}>Discussion airtime</h2>
 
       {totalPct > 0 && (
         <>
           {/* One stacked bar — everyone's share of the same discussion. */}
-          <div style={{ position: "relative", margin: "4px 0 34px" }}>
+          <div className="r-airtime">
             <div
+              className="r-airtime-bar"
               role="img"
               aria-label={colored.map((r) => `${r.label} ${r.pct}%`).join(", ")}
-              style={{ display: "flex", gap: 2, height: 12 }}
             >
               {colored.map((r) => (
                 <span
                   key={r.id}
-                  style={{
-                    width: `${(r.pct / totalPct) * 100}%`,
-                    background: r.color,
-                    borderRadius: 3,
-                  }}
+                  className="r-airtime-seg"
+                  style={{ width: `${(r.pct / totalPct) * 100}%`, background: r.color }}
                 />
               ))}
             </div>
@@ -66,61 +63,35 @@ export function GdMetricsPanel({ session }: { session: Session }) {
                 the left edge — the candidate segment starts there, so the
                 bracket reads directly against it. */}
             <div
+              className="r-airtime-band"
               aria-hidden
-              style={{
-                position: "absolute",
-                left: `${bandLo}%`,
-                width: `${bandHi - bandLo}%`,
-                top: "calc(100% + 4px)",
-                height: 5,
-                borderLeft: "1px solid var(--border-strong)",
-                borderRight: "1px solid var(--border-strong)",
-                borderBottom: "1px solid var(--border-strong)",
-                borderBottomLeftRadius: 2,
-                borderBottomRightRadius: 2,
-              }}
+              style={{ left: `${bandLo}%`, width: `${bandHi - bandLo}%` }}
             />
             <div
-              className="small muted"
-              style={{
-                position: "absolute",
-                left: `${bandLo}%`,
-                width: `${bandHi - bandLo}%`,
-                top: "calc(100% + 11px)",
-                textAlign: "center",
-                whiteSpace: "nowrap",
-                fontSize: "0.72rem",
-              }}
+              className="r-airtime-band-label"
+              style={{ left: `${bandLo}%`, width: `${bandHi - bandLo}%` }}
             >
               {bandLo}–{bandHi}% sweet spot
             </div>
           </div>
 
-          <div
-            className="small"
-            style={{ display: "flex", gap: "6px 16px", flexWrap: "wrap", marginBottom: "var(--space-3)" }}
-          >
+          <div className="r-airtime-legend">
             {colored.map((r) => (
-              <span key={r.id} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <span
-                  aria-hidden
-                  style={{ width: 9, height: 9, borderRadius: 3, background: r.color, display: "inline-block" }}
-                />
+              <span key={r.id} className="r-airtime-item">
+                <span className="r-airtime-swatch" aria-hidden style={{ background: r.color }} />
                 <span style={{ fontWeight: r.isCandidate ? 600 : 400 }}>{r.label}</span>
-                <span className="muted mono-num">{r.pct}%</span>
+                <span className="r-airtime-pct">{r.pct}%</span>
               </span>
             ))}
           </div>
         </>
       )}
 
-      <div style={{ display: "flex", gap: "var(--space-2) var(--space-4)", flexWrap: "wrap" }}>
+      <div className="r-stats">
         {stats.map((s) => (
-          <div key={s.label} title={s.title}>
-            <div className="small muted">{s.label}</div>
-            <div className="mono-num" style={{ fontWeight: 600, fontSize: "1.05rem" }}>
-              {s.value}
-            </div>
+          <div className="r-stat" key={s.label} title={s.title}>
+            <span className="r-stat-label">{s.label}</span>
+            <span className="r-stat-val">{s.value}</span>
           </div>
         ))}
       </div>

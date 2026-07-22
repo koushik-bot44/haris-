@@ -4,7 +4,7 @@
 // replay (binding hierarchy). Reads the guest store first; falls back to the
 // server copy (pinned /api/sessions contract) when this device lacks the round.
 
-import { useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { getSession } from "@/lib/session-store";
 import {
@@ -14,6 +14,7 @@ import {
   sessionBounds,
 } from "@/lib/report-utils";
 import { EmptyState } from "@/components/ReportNav";
+import { ReportStyles } from "@/components/report/ReportStyles";
 import { ScoreVerdict } from "@/components/report/ScoreVerdict";
 import { DeliveryRow } from "@/components/report/DeliveryRow";
 import { QuestionCard } from "@/components/report/QuestionCard";
@@ -74,24 +75,17 @@ export default function ReportPage() {
   const s = state.session;
   return (
     <main className="wrap">
-      <h1 style={{ marginBottom: "var(--space-2)" }}>Interview report</h1>
-      <div
-        style={{
-          display: "flex",
-          gap: 8,
-          flexWrap: "wrap",
-          alignItems: "center",
-          marginBottom: "var(--space-4)",
-        }}
-      >
+      <ReportStyles />
+      <h1 className="r-title">Interview report</h1>
+      <div className="r-meta">
         <span className="chip">{roundLabel(s.roundType)} round</span>
         <span className="chip mono-num">
           {new Date(s.startedAt).toLocaleDateString()}{" "}
           {new Date(s.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
         </span>
         {s.topic ? (
-          <span className="chip" style={{ maxWidth: 320 }}>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>“{s.topic}”</span>
+          <span className="chip">
+            <span className="r-clip">“{s.topic}”</span>
           </span>
         ) : null}
       </div>
@@ -111,9 +105,9 @@ export default function ReportPage() {
       {s.roundType === "gd" && <GdMetricsPanel session={s} />}
 
       {s.perQuestionScores.length > 0 && (
-        <section style={{ margin: "var(--space-4) 0" }}>
+        <section className="r-section">
           <h2>Question by question</h2>
-          <div style={{ display: "grid", gap: "var(--space-2)" }}>
+          <div className="r-qgrid">
             {s.perQuestionScores.map((e) => (
               <QuestionCard key={e.questionId} entry={e} />
             ))}
@@ -136,66 +130,23 @@ function Replay({ session }: { session: Session }) {
 
   if (session.turns.length === 0 || duration <= 0) {
     return (
-      <section style={{ margin: "var(--space-4) 0" }}>
+      <section className="r-section">
         <h2>Replay</h2>
         <p className="muted">No transcript was recorded for this round.</p>
       </section>
     );
   }
 
+  const fillPct = duration > 0 ? (pos / duration) * 100 : 0;
   return (
-    <section style={{ margin: "var(--space-4) 0" }}>
+    <section className="r-section">
       <h2>Replay</h2>
-      <style>{`
-        input[type="range"].scrub {
-          -webkit-appearance: none;
-          appearance: none;
-          background: transparent;
-          height: 16px;
-          margin: 0;
-          cursor: pointer;
-        }
-        .scrub::-webkit-slider-runnable-track {
-          height: 4px;
-          background: var(--surface-2);
-          border-radius: 2px;
-        }
-        .scrub::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 16px;
-          height: 16px;
-          border-radius: 50%;
-          background: var(--text);
-          border: none;
-          margin-top: -6px;
-        }
-        .scrub::-moz-range-track {
-          height: 4px;
-          background: var(--surface-2);
-          border-radius: 2px;
-        }
-        .scrub::-moz-range-thumb {
-          width: 16px;
-          height: 16px;
-          border-radius: 50%;
-          background: var(--text);
-          border: none;
-        }
-      `}</style>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 14,
-          margin: "0 0 var(--space-3)",
-          padding: "0 2px",
-        }}
-      >
-        {/* Native range input: draggable AND keyboard-operable (arrow keys). */}
+      <div className="r-scrub-row">
+        {/* Native range input: draggable AND keyboard-operable (arrow keys).
+            --fill paints the elapsed portion of the WebKit track. */}
         <input
           type="range"
-          className="scrub"
+          className="r-scrub"
           min={0}
           max={duration}
           step={1000}
@@ -203,9 +154,9 @@ function Replay({ session }: { session: Session }) {
           onChange={(e) => setPos(Number(e.target.value))}
           aria-label="Replay position"
           aria-valuetext={`${formatElapsed(pos)} of ${formatElapsed(duration)}`}
-          style={{ flex: 1 }}
+          style={{ ["--fill" as string]: `${fillPct}%` } as CSSProperties}
         />
-        <span className="small muted mono-num" style={{ whiteSpace: "nowrap" }}>
+        <span className="small muted r-scrub-time">
           {formatElapsed(pos)} / {formatElapsed(duration)}
         </span>
       </div>

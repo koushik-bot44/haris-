@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { guidanceCacheKey } from "@/lib/guidance-key";
 import type { Guidance } from "@/lib/llm/guidance";
 import { CRITERION_LABEL, latestWeakest, scoredSessions, sessionAvg, type FixFirst } from "@/lib/report-utils";
+import { ReportStyles } from "@/components/report/ReportStyles";
 import { loadSessions } from "@/lib/session-store";
 import type { RolePreset } from "@/lib/types";
 
@@ -163,15 +164,16 @@ export default function GuidancePage() {
 
   return (
     <main className="wrap">
-      <h1>Your path from here</h1>
-      <p className="muted" style={{ marginTop: 0 }}>
+      <ReportStyles />
+      <h1 className="r-title">Your path from here</h1>
+      <p className="r-lead tight">
         What to close, learn and aim for — built from your scored rounds
         {inputs?.resumeText ? " and your resume" : ""}.
       </p>
       {cold && <p className="small muted">Do a round or paste your resume and this sharpens.</p>}
 
       {loading && !g && (
-        <div aria-hidden style={{ display: "grid", gap: "var(--space-3)", marginTop: "var(--space-3)" }}>
+        <div aria-hidden className="r-skeleton">
           <div className="card tinted" style={{ height: 110 }} />
           <div className="card tinted" style={{ height: 190 }} />
         </div>
@@ -190,56 +192,60 @@ export default function GuidancePage() {
 
       {g && (
         <>
-          <section style={{ marginTop: "var(--space-4)" }}>
+          <section className="r-section">
             <h2>Close these gaps first</h2>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div className="r-gaps">
               {g.skillGaps.map((s) => (
-                <span className="chip" style={{ whiteSpace: "normal" }} key={s}>
+                <span className="chip wrap" key={s}>
                   {s}
                 </span>
               ))}
             </div>
             {fix && (
-              <p className="small muted" style={{ margin: "10px 0 0" }}>
+              <p className="small muted" style={{ margin: "12px 0 0" }}>
                 Latest round: {CRITERION_LABEL[fix.criterion]} was your weakest at {fix.score}/5
                 {fix.evidence ? <> — “{fix.evidence}”</> : null}
               </p>
             )}
           </section>
 
-          <section style={{ marginTop: "var(--space-4)" }}>
+          <section className="r-section">
             <h2>Learning path</h2>
-            <ol style={{ margin: 0, paddingLeft: 24, display: "grid", gap: "var(--space-2)" }}>
-              {g.learningPath.map((step) => (
-                <li key={step.skill}>
-                  <span style={{ fontWeight: 600 }}>{step.skill}</span>
-                  <span className="muted"> — {step.why}</span>
-                  <br />
-                  <span className="small muted">{step.resource}</span>
+            <ol className="r-path">
+              {g.learningPath.map((step, i) => (
+                <li className="r-step" key={step.skill}>
+                  <span className="r-step-num" aria-hidden>
+                    {i + 1}
+                  </span>
+                  <div>
+                    <div>
+                      <span className="r-step-skill">{step.skill}</span>
+                      <span className="r-step-why"> — {step.why}</span>
+                    </div>
+                    <div className="r-step-resource">{step.resource}</div>
+                  </div>
                 </li>
               ))}
             </ol>
           </section>
 
-          <section style={{ marginTop: "var(--space-4)" }}>
+          <section className="r-section">
             <h2>Certifications worth having</h2>
-            <ul style={{ margin: 0, paddingLeft: 20, display: "grid", gap: 6 }}>
+            <ul className="r-certs">
               {g.certifications.map((c) => (
                 <li key={c}>{c}</li>
               ))}
             </ul>
           </section>
 
-          <section style={{ marginTop: "var(--space-4)" }}>
+          <section className="r-section">
             <h2>Roles that fit you</h2>
-            <div style={{ display: "grid", gap: "var(--space-2)" }}>
+            <div className="r-roles">
               {g.roles.map((r) => (
                 <div className="card" key={r.title}>
-                  <div style={{ fontWeight: 600 }}>{r.title}</div>
-                  <p className="small muted" style={{ margin: "4px 0 10px" }}>
-                    {r.why}
-                  </p>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <div className="r-role-title">{r.title}</div>
+                  <p className="r-role-why">{r.why}</p>
+                  <div className="r-role-companies">
                     {r.companies.map((c) => (
                       <span className="chip" key={c}>
                         {c}
@@ -251,7 +257,7 @@ export default function GuidancePage() {
             </div>
           </section>
 
-          <div style={{ marginTop: "var(--space-4)", display: "flex", alignItems: "center", gap: 10 }}>
+          <div className="r-actions">
             <button className="btn quiet" onClick={refresh} disabled={loading}>
               Refresh
             </button>

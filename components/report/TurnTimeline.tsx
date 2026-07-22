@@ -40,7 +40,7 @@ export function TurnTimeline({
   };
 
   return (
-    <div style={{ display: "grid", gap: 10 }}>
+    <div className="r-turns">
       {session.turns.map((t, i) => {
         const active = activeIndex === i;
         const candidate = t.speaker === "candidate";
@@ -52,43 +52,23 @@ export function TurnTimeline({
             }}
           >
             {marksFor(i).map((j, k) => (
-              <div
-                key={k}
-                className="small muted"
-                style={{ display: "flex", alignItems: "center", gap: 6, margin: "0 0 6px 14px" }}
-              >
-                <span
-                  aria-hidden
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: "50%",
-                    background: "var(--live)",
-                    flexShrink: 0,
-                  }}
-                />
+              <div key={k} className="r-mark">
+                <span className="r-mark-dot" aria-hidden />
                 jumped in at {formatElapsed(j.tMs)}
                 {j.builtOnPrevious ? " — building on the previous point" : ""}
               </div>
             ))}
-            <div
-              style={{
-                padding: "10px 14px",
-                background: candidate ? "var(--surface)" : "transparent",
-                borderRadius: "var(--radius-sm)",
-                outline: active ? "1px solid var(--text)" : undefined,
-              }}
-            >
-              <div className="small" style={{ fontWeight: 600 }}>
+            <div className={`r-turn${candidate ? " candidate" : ""}${active ? " active" : ""}`}>
+              <div className="r-turn-head">
                 {speakerName(t, session.roundType)}{" "}
-                <span className="muted mono-num" style={{ fontWeight: 500 }}>
+                <span className="r-turn-time">
                   ·{" "}
                   {showElapsed
                     ? `at ${formatElapsed(t.tStart - start)}`
                     : new Date(t.tStart).toLocaleTimeString()}
                 </span>
               </div>
-              <p style={{ margin: "4px 0 0" }}>{t.text}</p>
+              <p className="r-turn-text">{t.text}</p>
             </div>
           </div>
         );

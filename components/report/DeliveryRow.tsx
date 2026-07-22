@@ -18,22 +18,11 @@ export function DeliveryRow({ session }: { session: Session }) {
     stats.push({ label: "Interviewer latency", value: `${session.latency.avgMs} ms avg` });
   }
   return (
-    <div
-      className="card tinted"
-      aria-label="Delivery metrics"
-      style={{
-        margin: "var(--space-3) 0",
-        display: "flex",
-        gap: "var(--space-2) var(--space-4)",
-        flexWrap: "wrap",
-      }}
-    >
+    <div className="card tinted r-block r-stats" aria-label="Delivery metrics">
       {stats.map((s) => (
-        <div key={s.label} title={s.title}>
-          <div className="small muted">{s.label}</div>
-          <div className="mono-num" style={{ fontWeight: 600, fontSize: "1.05rem" }}>
-            {s.value}
-          </div>
+        <div className="r-stat" key={s.label} title={s.title}>
+          <span className="r-stat-label">{s.label}</span>
+          <span className="r-stat-val">{s.value}</span>
         </div>
       ))}
     </div>
