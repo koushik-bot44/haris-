@@ -22,8 +22,12 @@ const HUES: Record<Mode, [number, number, number]> = {
 
 const SAT: Record<Mode, number> = { ai: 68, user: 70, thinking: 30, idle: 14 };
 
-export function VoiceOrb({ size = 260 }: { size?: number }) {
+export function VoiceOrb({ size = 260, hue }: { size?: number; hue?: [number, number, number] }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Ref, not effect dep — a persona hue array recreated per render must not
+  // restart the canvas loop.
+  const hueRef = useRef<[number, number, number] | undefined>(hue);
+  hueRef.current = hue;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -52,7 +56,10 @@ export function VoiceOrb({ size = 260 }: { size?: number }) {
       smoothLevel += ((mode === "idle" ? 0 : s.level) - smoothLevel) * 0.16;
       const level = reduced ? smoothLevel * 0.5 : smoothLevel;
       sat += (SAT[mode] - sat) * 0.05;
-      const targetHues = HUES[mode];
+      // "ai" tint priority: per-orb prop (GD persona orbs) > global utterance
+      // hue (speak() opts.hue) > default family. Identical when both unset.
+      const aiOverride = mode === "ai" ? (hueRef.current ?? s.aiHue) : null;
+      const targetHues = aiOverride ?? HUES[mode];
       hues = hues.map((h, i) => {
         let d = targetHues[i] - h;
         if (d > 180) d -= 360;

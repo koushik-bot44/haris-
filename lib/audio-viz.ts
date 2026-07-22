@@ -17,9 +17,11 @@ interface VizState {
   mode: VizMode;
   level: number; // 0..1, smoothed by the writer
   pseudo: boolean; // true while a pseudo-envelope drives level
+  /** Per-utterance tint for "ai" mode (GD persona identity); null = default hues. */
+  aiHue: [number, number, number] | null;
 }
 
-const state: VizState = { mode: "idle", level: 0, pseudo: false };
+const state: VizState = { mode: "idle", level: 0, pseudo: false, aiHue: null };
 
 export function vizState(): Readonly<VizState> {
   return state;
@@ -30,21 +32,43 @@ export function setVizMode(mode: VizMode): void {
   if (mode === "idle" || mode === "thinking") state.level = 0;
 }
 
+export function setAiHue(hue: [number, number, number] | null): void {
+  state.aiHue = hue;
+}
+
 // ——— user mic (true amplitude) ———
 
 let micStream: MediaStream | null = null;
+let micCtx: AudioContext | null = null;
 let micRaf = 0;
+// Generation token: stopMicViz() racing a pending getUserMedia must win —
+// otherwise the stream acquired after stop keeps the mic indicator live
+// forever with nothing left to release it.
+let micGen = 0;
+let micPending = false;
 
 export async function startMicViz(): Promise<void> {
-  if (typeof window === "undefined" || micStream) return;
+  if (typeof window === "undefined" || micStream || micPending) return;
+  const gen = micGen;
+  micPending = true;
+  let stream: MediaStream;
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({
+    stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true },
     });
   } catch {
     return; // no permission — the orb still animates from STT activity pseudo
+  } finally {
+    micPending = false;
   }
+  if (gen !== micGen) {
+    // stopMicViz ran while the permission prompt / acquisition was pending.
+    stream.getTracks().forEach((t) => t.stop());
+    return;
+  }
+  micStream = stream;
   const ctx = new AudioContext();
+  micCtx = ctx;
   const source = ctx.createMediaStreamSource(micStream);
   const analyser = ctx.createAnalyser();
   analyser.fftSize = 512;
@@ -69,37 +93,53 @@ export async function startMicViz(): Promise<void> {
 }
 
 export function stopMicViz(): void {
+  micGen++;
   cancelAnimationFrame(micRaf);
   micStream?.getTracks().forEach((t) => t.stop());
   micStream = null;
+  micCtx?.close().catch(() => {});
+  micCtx = null;
 }
 
 // ——— playback taps (true amplitude for AudioContext-based engines) ———
 
+// ONE analyser + ONE rAF loop per AudioContext — streaming playback connects
+// many short-lived sources per utterance; a per-call analyser would leak a
+// permanent rAF loop each time.
+const taps = new WeakMap<AudioContext, AnalyserNode>();
+
 /** Insert an analyser between `node` and the destination; feeds the orb while
  * mode is "ai". Returns the node to connect INSTEAD of ctx.destination. */
 export function tapPlayback(ctx: AudioContext, node: AudioNode): AudioNode {
-  const analyser = ctx.createAnalyser();
-  analyser.fftSize = 512;
-  analyser.smoothingTimeConstant = 0.6;
-  node.connect(analyser);
-  analyser.connect(ctx.destination);
-  const buf = new Uint8Array(analyser.frequencyBinCount);
-  const tick = () => {
-    if (ctx.state === "closed") return;
-    analyser.getByteTimeDomainData(buf);
-    let sum = 0;
-    for (let i = 0; i < buf.length; i += 4) {
-      const v = (buf[i] - 128) / 128;
-      sum += v * v;
-    }
-    const rms = Math.sqrt(sum / (buf.length / 4));
-    if (state.mode === "ai" && !state.pseudo) {
-      state.level = Math.min(1, state.level * 0.55 + Math.min(1, rms * 7) * 0.45);
-    }
+  let analyser = taps.get(ctx);
+  if (!analyser) {
+    const a = ctx.createAnalyser();
+    a.fftSize = 512;
+    a.smoothingTimeConstant = 0.6;
+    a.connect(ctx.destination);
+    taps.set(ctx, a);
+    analyser = a;
+    const buf = new Uint8Array(a.frequencyBinCount);
+    const tick = () => {
+      if (ctx.state === "closed") {
+        taps.delete(ctx);
+        return;
+      }
+      a.getByteTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i += 4) {
+        const v = (buf[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / (buf.length / 4));
+      if (state.mode === "ai" && !state.pseudo) {
+        state.level = Math.min(1, state.level * 0.55 + Math.min(1, rms * 7) * 0.45);
+      }
+      requestAnimationFrame(tick);
+    };
     requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
+  }
+  node.connect(analyser);
   return analyser;
 }
 
