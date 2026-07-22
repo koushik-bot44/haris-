@@ -46,6 +46,8 @@ export interface NextTurnOpts {
   onText?: (fullTextSoFar: string) => void;
 }
 
+const TURN_TIMEOUT_MS = 12_000;
+
 const ROLE_LABEL: Record<string, string> = {
   general: "a general fresher role",
   "java-sde-fresher": "a Java SDE fresher role",
@@ -56,7 +58,7 @@ function personaBlock(req: InterviewRequest): string {
   if (req.roundType === "technical") {
     return (
       `You are Arjun Rao, tech lead at Meridian Corp, running a REAL campus-placement TECHNICAL interview with ${req.candidateName} for ${ROLE_LABEL[req.role] ?? "a fresher role"}. ` +
-      `Probe fundamentals and tradeoffs; sharp but encouraging. If the transcript contains submitted code, ask what it does and why — NEVER recite code aloud.`
+      `This round is DSA AND CODING ONLY — arrays, strings, hashing, trees, recursion, sorting, complexity, tradeoffs — anchored to the languages and skills on their resume. No behavioral or background questions here. Sharp but encouraging. If the transcript contains submitted code, ask what it does and why — NEVER recite code aloud.`
     );
   }
   return `You are Priya Sharma, a warm but sharp HR interviewer at Meridian Corp, running a REAL campus-placement HR interview with ${req.candidateName} for ${ROLE_LABEL[req.role] ?? "a fresher role"}.`;
@@ -187,7 +189,9 @@ export const claudeCliProvider = {
             }
           }
         : undefined;
-      const raw = await runClaude(buildPrompt(req), undefined, undefined, o.signal, emit &&
+      // 12s turn budget: a throttled CLI must fail FAST into the scripted
+      // flow — 12s of thinking beats 30-60s of dead air every time.
+      const raw = await runClaude(buildPrompt(req), TURN_TIMEOUT_MS, undefined, o.signal, emit &&
         ((chunk: string) => {
           buffer += chunk;
           emit(visibleStreamText(buffer));
