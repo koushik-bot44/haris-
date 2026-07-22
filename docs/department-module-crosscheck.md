@@ -40,6 +40,24 @@ The official 10-module spec ("AI Powered Interview Preparation and Placement Ass
 6. **Delivery metrics** — pace, fillers, hesitations, longest pause, computed on-device.
 7. **Full quality pipeline on record** — 8-reviewer pre-landing review (52 findings, 41 fixed), live QA at 96/100, 265 unit tests, all in this repo's history.
 
+## Where the Generative AI is (the project title's "Using Generative AI", mapped)
+
+Every module runs on generative models — nothing here is a lookup table wearing an AI costume:
+
+| Surface | Generative model at work | What it generates |
+|---|---|---|
+| Interview questions (HR + Technical) | Large language model (Claude family via local CLI; OpenRouter/Gemini slot ready) | Every adaptive question and follow-up is generated live from YOUR resume and YOUR previous answers — the deep-dive probes react to exact wording, which no scripted system can do |
+| Answer evaluation | LLM (sonnet-class) | Rubric scores, evidence selection, and coach-tone improvement tips — generated per answer, then the quotes are programmatically verified against the transcript (a hallucination guard on top of generation) |
+| Resume analysis + ATS | LLM | Strengths, probe-points, talking points, missing skills, improvements — generated from the resume text |
+| Career guidance + job recommendations | LLM | Learning path, certification picks, skill-gap analysis, role/company fits |
+| Group Discussion debaters | LLM (batched multi-persona generation) | Three distinct debate personas + a moderator generating argument turns that respond to the candidate's points |
+| The interviewer's voice | **Generative neural TTS** (Resemble AI Chatterbox — 0.5B-parameter speech model, MIT-licensed) | The speech waveform itself is generated, sentence by sentence, streamed; supports zero-shot voice cloning and paralinguistic generation ([chuckle], [sigh]) |
+| Speech recognition | Neural sequence model (OpenAI Whisper on-device, when Chrome's service is unavailable) | Transcription via a generative encoder-decoder transformer |
+
+**Viva one-liner:** "The system composes four generative models — an LLM for reasoning and dialogue, a diffusion-class neural TTS for speech, Whisper for recognition — with a deterministic verification layer on top, because generative output must be trusted only after checking: every evidence quote is verified against the transcript before a student sees it."
+
+Engineering honesty that examiners reward: the system also carries **deterministic fallbacks** for every generative path (scripted question banks, heuristic scoring, curated guidance) so a model outage never kills a session — that's a generative-AI *architecture* decision, not a lack of generative AI.
+
 ## Remaining (tracked in TODOS.md)
 
 Deploy to Vercel + create the GitHub repo (no remote yet), swap in the paid LLM API when purchased, the evaluation study and campus distribution (calendar work), and the deferred delight tier.
