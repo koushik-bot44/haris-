@@ -44,25 +44,23 @@ export function countWords(text: string): number {
 // turn is delivered instantly; if they keep going, the speculation goes stale
 // and a fresh one is armed once the transcript has grown enough.
 
-// Aggressive speculation (tuned after the "voice comes late" feedback): on a
-// GPU-less Mac Elena needs ~3s to synthesize, so the ONLY way her reply lands
-// instantly is to start generating + synthesizing it WHILE the candidate is
-// still talking. Fire early and often — the LLM (Groq) is cheap and the local
-// voice is free, so a few discarded speculations are worth an instant reply.
+// Speculation pre-fetches the NEXT question text (a cheap Groq call) while the
+// candidate is still answering, so accepting it skips the LLM round-trip. It
+// deliberately does NOT pre-synthesize audio — the single local Chatterbox
+// server can't take concurrent synthesis, so the voice is made once, live, at
+// endAnswer. Conservative thresholds keep Groq free-tier calls in check.
 
 /** Pause length that marks a draft point — well under PAUSE_END_MS, so the
  * speculative request is in flight BEFORE the answer actually ends. */
-export const SPECULATE_PAUSE_MS = 500;
+export const SPECULATE_PAUSE_MS = 800;
 /** Below this many words an answer is too thin to speculate on. */
-export const SPECULATE_MIN_WORDS = 8;
+export const SPECULATE_MIN_WORDS = 15;
 /** After a speculation fires, the transcript must grow by this many words
  * before a newer speculation replaces it. */
-export const SPECULATE_REARM_WORDS = 14;
+export const SPECULATE_REARM_WORDS = 25;
 /** A final transcript that grew by this many words (or more) past the
- * speculative basis invalidates the cached turn. Generous — the deep-dive
- * questions rarely hinge on the candidate's last few words, and an instant
- * on-topic reply beats a perfectly-tailored one that arrives 4s late. */
-export const SPECULATION_STALE_WORDS = 16;
+ * speculative basis invalidates the cached turn. */
+export const SPECULATION_STALE_WORDS = 10;
 
 /** Draft-point policy: should this listening tick fire a speculative
  * next-turn request? lastBasisWords is the word count the newest outstanding

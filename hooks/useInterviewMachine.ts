@@ -342,9 +342,16 @@ export function useInterviewMachine(
         .then((r) => (r.ok ? (r.json() as Promise<{ turn: InterviewerTurn }>) : null))
         .then((d) => {
           if (!d?.turn || spec.cancelled || endedRef.current) return null;
-          // Pre-synthesize from the RAW text (paralinguistic tags included),
-          // exactly like the live speak() path; captions strip tags at delivery.
-          spec.prepared = prepareSpeak(d.turn.text, { voice: voiceForRound(roundType) });
+          // Pre-synthesize ONLY the opening greeting (basisWords 0 = one request
+          // during preroll). Mid-answer speculation must NOT pre-synthesize:
+          // the single local Chatterbox server can't take several concurrent
+          // synthesis requests — they pile up, some fail, and a failure is what
+          // dropped the voice to the robotic system fallback. Mid-answer specs
+          // pre-fetch only the (cheap, cloud) question text; the audio is
+          // synthesized live once, at endAnswer.
+          if (basisWords === 0) {
+            spec.prepared = prepareSpeak(d.turn.text, { voice: voiceForRound(roundType) });
+          }
           return d.turn;
         })
         .catch(() => null); // speculation failures are silent by design
