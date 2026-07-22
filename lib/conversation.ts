@@ -44,17 +44,25 @@ export function countWords(text: string): number {
 // turn is delivered instantly; if they keep going, the speculation goes stale
 // and a fresh one is armed once the transcript has grown enough.
 
+// Aggressive speculation (tuned after the "voice comes late" feedback): on a
+// GPU-less Mac Elena needs ~3s to synthesize, so the ONLY way her reply lands
+// instantly is to start generating + synthesizing it WHILE the candidate is
+// still talking. Fire early and often — the LLM (Groq) is cheap and the local
+// voice is free, so a few discarded speculations are worth an instant reply.
+
 /** Pause length that marks a draft point — well under PAUSE_END_MS, so the
  * speculative request is in flight BEFORE the answer actually ends. */
-export const SPECULATE_PAUSE_MS = 800;
+export const SPECULATE_PAUSE_MS = 500;
 /** Below this many words an answer is too thin to speculate on. */
-export const SPECULATE_MIN_WORDS = 15;
+export const SPECULATE_MIN_WORDS = 8;
 /** After a speculation fires, the transcript must grow by this many words
  * before a newer speculation replaces it. */
-export const SPECULATE_REARM_WORDS = 25;
+export const SPECULATE_REARM_WORDS = 14;
 /** A final transcript that grew by this many words (or more) past the
- * speculative basis invalidates the cached turn. */
-export const SPECULATION_STALE_WORDS = 8;
+ * speculative basis invalidates the cached turn. Generous — the deep-dive
+ * questions rarely hinge on the candidate's last few words, and an instant
+ * on-topic reply beats a perfectly-tailored one that arrives 4s late. */
+export const SPECULATION_STALE_WORDS = 16;
 
 /** Draft-point policy: should this listening tick fire a speculative
  * next-turn request? lastBasisWords is the word count the newest outstanding

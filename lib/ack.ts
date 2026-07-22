@@ -17,10 +17,21 @@ import { getVoiceEngine } from "@/lib/tts";
 
 export type AckKind = "ack" | "encourage" | "rephrase";
 
+// The "ack" lines are the latency mask: a real interviewer thinks out loud for
+// a couple of seconds before the next question. These are pre-synthesized once
+// and play INSTANTLY when the answer ends, bridging the ~3s Elena needs to
+// synthesize the real reply on a GPU-less machine — so there is never dead air
+// between the candidate finishing and the interviewer speaking. Kept varied so
+// five of them across one round don't sound like a loop.
 export const ACK_TEXTS: Record<AckKind, string[]> = {
-  ack: ["Hmm.", "Mm-hm, okay.", "Right."],
-  encourage: ["Mm-hm — go on?", "Take your time."],
-  rephrase: ["No rush. Want me to rephrase the question?"],
+  ack: [
+    "Mm, okay. Let me think about that for a second.",
+    "Right, got it. Give me just a moment on that.",
+    "Okay, that's helpful — let me follow up on that.",
+    "I see. Let me take that in for a second.",
+  ],
+  encourage: ["Mm-hm — go on?", "Take your time.", "Sure, keep going."],
+  rephrase: ["No rush at all. Want me to rephrase the question?"],
 };
 
 const ACK_KINDS = Object.keys(ACK_TEXTS) as AckKind[];

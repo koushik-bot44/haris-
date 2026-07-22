@@ -272,8 +272,13 @@ function serverSpeak(text: string, engine: "elevenlabs" | "chatterbox", voice?: 
       // first syllable resolves firstSyllableAt (a failed fetch's own timing
       // never does), and engineUsed reports who actually spoke.
       if (!cancelled) {
+        // Prefer the natural on-device voice on any studio-engine failure; the
+        // robotic system voice is only the last resort when Kokoro isn't ready.
+        if ((engine === "chatterbox" || engine === "elevenlabs") && kokoroStatus() !== "ready") {
+          ensureKokoroLoading();
+        }
         fellBack =
-          engine === "chatterbox" && kokoroStatus() === "ready"
+          (engine === "chatterbox" || engine === "elevenlabs") && kokoroStatus() === "ready"
             ? wrapKokoro(kokoroSpeak(splitSentences(text), kokoroVoice(voice)))
             : systemSpeak(text, undefined);
         fellBack.firstSyllableAt.then(resolveFirst);
