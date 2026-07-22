@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  CodeLanguage,
   DeliveryMetrics,
   HistoryEntry,
   InterviewerTurn,
+  ResumeProfile,
   RolePreset,
   RubricEntry,
   Session,
@@ -15,7 +17,8 @@ import { composeOverall } from "@/lib/rubric";
 import { getSttEngine, setSttEngineEphemeral, startStt, type SttSession } from "@/lib/stt";
 import { ensureWhisperLoading } from "@/lib/stt-whisper";
 import { fullTranscript, type SttState } from "@/lib/stt-reducer";
-import { prepareSpeak, speak, type PreparedSpeech, type SpeakHandle } from "@/lib/tts";
+import { chainSpeak, prepareSpeak, speak, type PreparedSpeech, type SpeakHandle } from "@/lib/tts";
+import { firstSentence, parseSseEvents, remainderAfter } from "@/lib/stream";
 import { decideBargeIn, echoOverlap, ECHO_OVERLAP_THRESHOLD } from "@/lib/barge-in";
 import { aggregateMetrics, computeDeliveryMetrics, METRICS_VERSION } from "@/lib/metrics";
 import { newSessionId, saveSession } from "@/lib/session-store";
@@ -30,7 +33,7 @@ import {
   type ListenSnapshot,
 } from "@/lib/conversation";
 import { voiceForRound } from "@/lib/voices";
-import { CODING_QUESTIONS, TECH_PERSONA, type CodingQuestion } from "@/lib/fixtures/technical-questions";
+import { codingQuestionFor, TECH_PERSONA, type CodingQuestion } from "@/lib/fixtures/technical-questions";
 import { setVizMode, startMicViz, stopMicViz } from "@/lib/audio-viz";
 
 export interface Persona {
@@ -40,6 +43,32 @@ export interface Persona {
 }
 
 const HR_PERSONA: Persona = { name: "Priya Sharma", title: "HR, Meridian Corp", initials: "PS" };
+
+/** Setup-page extras (pinned sessionStorage keys) read ONCE at hook init and
+ * sent on EVERY /api/interview body — live, speculative, and opening — so the
+ * interviewer brain knows the candidate. Any parse failure means absent. */
+function readInterviewExtras(): { profile?: ResumeProfile; codeLanguage?: CodeLanguage } {
+  if (typeof window === "undefined") return {};
+  const extras: { profile?: ResumeProfile; codeLanguage?: CodeLanguage } = {};
+  try {
+    const raw = window.sessionStorage.getItem("pds_resume_profile");
+    if (raw) extras.profile = JSON.parse(raw) as ResumeProfile;
+  } catch {}
+  try {
+    const lang = window.sessionStorage.getItem("pds_code_lang");
+    if (lang === "java" || lang === "python" || lang === "cpp" || lang === "javascript" || lang === "c") {
+      extras.codeLanguage = lang;
+    }
+  } catch {}
+  return extras;
+}
+
+/** A streamed turn's already-in-flight first utterance (voice pipelining). */
+interface LiveSpeech {
+  handle: SpeakHandle;
+  /** Exactly what the first utterance is speaking — remainder anchor. */
+  spoken: string;
+}
 
 /** /api/score's answer cap — the SENT answer keeps the newest tail. */
 const SCORE_ANSWER_MAX_CHARS = 8000;
@@ -173,6 +202,11 @@ export function useInterviewMachine(
   const ttsTurnStartRef = useRef<number | null>(null);
   /** Newest mid-answer speculation — older ones are cancelled on replacement. */
   const specRef = useRef<PrefetchedTurn | null>(null);
+  /** In-flight streaming interviewer fetch — cleanup aborts the SSE reader. */
+  const streamAbortRef = useRef<AbortController | null>(null);
+  /** Setup-page extras, read once (identical on every request this session). */
+  const extrasRef = useRef<{ profile?: ResumeProfile; codeLanguage?: CodeLanguage } | null>(null);
+  if (extrasRef.current === null) extrasRef.current = readInterviewExtras();
   /** Opening pre-warm fired during preroll (deterministic empty-history call). */
   const openingRef = useRef<PrefetchedTurn | null>(null);
   const codingActiveRef = useRef(false);
@@ -216,6 +250,8 @@ export function useInterviewMachine(
     specRef.current = null;
     openingRef.current?.cancel();
     openingRef.current = null;
+    streamAbortRef.current?.abort();
+    streamAbortRef.current = null;
     stopMicViz();
     setVizMode("idle");
   }, []);
@@ -250,10 +286,29 @@ export function useInterviewMachine(
     setDegradeReason(reason);
   }, []);
 
+  /** ONE body shape for every interviewer request — live, speculative, and
+   * opening — including the resume profile + code language extras. That
+   * identity is what makes speculation acceptance sound. */
+  const requestBody = useCallback(
+    (history: HistoryEntry[], stream: boolean) =>
+      JSON.stringify({
+        role,
+        roundType,
+        candidateName,
+        ...(resume ? { resume } : {}),
+        ...(extrasRef.current ?? {}),
+        history,
+        ...(stream ? { stream: true } : {}),
+      }),
+    [candidateName, resume, role, roundType],
+  );
+
   /** Fire a speculative /api/interview call NOW and pre-synthesize its reply
    * audio. The request body is IDENTICAL to what callInterviewer would send
    * with this history — that identity is what makes acceptance sound. Failures
-   * resolve to null and are silent: the normal path is never affected. */
+   * resolve to null and are silent: the normal path is never affected.
+   * Speculation stays NON-stream on purpose: it runs in the background, so
+   * time-to-first-token buys nothing and the JSON path is the simple one. */
   const prefetchTurn = useCallback(
     (history: HistoryEntry[], basisWords: number): PrefetchedTurn => {
       const abort = new AbortController();
@@ -272,13 +327,7 @@ export function useInterviewMachine(
       spec.turnPromise = fetch("/api/interview", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          role,
-          roundType,
-          candidateName,
-          ...(resume ? { resume } : {}),
-          history,
-        }),
+        body: requestBody(history, false),
         signal: abort.signal,
       })
         .then((r) => (r.ok ? (r.json() as Promise<{ turn: InterviewerTurn }>) : null))
@@ -292,7 +341,7 @@ export function useInterviewMachine(
         .catch(() => null); // speculation failures are silent by design
       return spec;
     },
-    [candidateName, resume, role, roundType],
+    [requestBody, roundType],
   );
 
   // ——— mic check ———
@@ -515,10 +564,18 @@ export function useInterviewMachine(
   /** Deliver an interviewer turn: history/captions/phase, speak it (prepared
    * speculative audio when supplied), latency accounting, live-mic barge-in,
    * then hand off to listening / finish. Extracted from callInterviewer so the
-   * speculative accepted path reuses the exact same pipeline. */
-  const deliverTurn = useCallback(async (turn: InterviewerTurn, prepared: PreparedSpeech | null, fromCache: boolean) => {
+   * speculative accepted path reuses the exact same pipeline. `live` = a
+   * streamed turn's first sentence ALREADY speaking (voice pipelining) — the
+   * remainder chains after it under one composite handle. */
+  const deliverTurn = useCallback(async (
+    turn: InterviewerTurn,
+    prepared: PreparedSpeech | null,
+    fromCache: boolean,
+    live?: LiveSpeech | null,
+  ) => {
     if (endedRef.current) {
       prepared?.cancel();
+      live?.handle.cancel();
       return;
     }
 
@@ -554,12 +611,18 @@ export function useInterviewMachine(
     // guard, or the next question speaks over the home page.
     if (endedRef.current) {
       prepared?.cancel();
+      live?.handle.cancel();
       return;
     }
 
-    // Prepared (speculative) audio schedules instantly; play() itself falls
-    // back to live speak() when preparation failed or hasn't finished.
-    const handle = prepared ? prepared.play() : speak(turn.text, { voice: voiceForRound(roundType) });
+    // One handle, three sources: a streamed turn chains the remainder after
+    // its already-speaking first sentence (cancel covers both utterances);
+    // prepared (speculative) audio schedules instantly; otherwise live speak().
+    const handle = live
+      ? chainSpeak(live.handle, remainderAfter(turn.text, live.spoken), { voice: voiceForRound(roundType) })
+      : prepared
+        ? prepared.play()
+        : speak(turn.text, { voice: voiceForRound(roundType) });
     speakRef.current = handle;
     ttsTurnStartRef.current = null;
     handle.firstSyllableAt.then((t) => {
@@ -663,22 +726,120 @@ export function useInterviewMachine(
     }
   }, [beginListening, degradeToText, finishInterview, roundType]);
 
+  /** One streaming attempt (stream:true → SSE). The display-first pipeline:
+   * text events set the caption WHILE phase is still 'thinking' — the user
+   * watches the reply type out during generation — and the moment the first
+   * sentence completes, TTS starts on it (voice pipelining; phase flips to
+   * 'speaking' only when audio actually starts). Resolves with the final turn
+   * plus the in-flight first utterance; throws on ANY failure with that
+   * utterance already cancelled (the caller falls back to one non-stream POST). */
+  const streamTurn = useCallback(async (): Promise<{ turn: InterviewerTurn; live: LiveSpeech | null }> => {
+    const abort = new AbortController();
+    streamAbortRef.current = abort;
+    let firstHandle: SpeakHandle | null = null;
+    let spoken = "";
+    let failed = false;
+    try {
+      const res = await fetch("/api/interview", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: requestBody(historyRef.current, true),
+        signal: abort.signal,
+      });
+      if (endedRef.current) throw new Error("ended");
+      if (!res.ok || !res.body) throw new Error(`stream_${res.status}`);
+      // A JSON response despite stream:true (proxy stripped it, older server)
+      // is still a valid turn — use it instead of burning a second LLM call.
+      if (res.headers.get("content-type")?.includes("application/json")) {
+        const data = (await res.json()) as { turn?: InterviewerTurn };
+        if (!data?.turn) throw new Error("stream_bad_json");
+        return { turn: data.turn, live: null };
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let turn: InterviewerTurn | null = null;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (endedRef.current) {
+          void reader.cancel().catch(() => {});
+          throw new Error("ended");
+        }
+        if (value) buf += decoder.decode(value, { stream: true });
+        const { events, rest } = parseSseEvents(buf);
+        buf = rest;
+        for (const ev of events) {
+          if (ev.kind === "error") throw new Error(ev.error);
+          if (ev.kind === "turn") {
+            turn = ev.turn;
+            continue;
+          }
+          // Display-first: captions are a11y and always rendered, so the
+          // accumulated text shows immediately, still under 'thinking'.
+          setCaption(stripSpeechTags(ev.text));
+          if (!textModeRef.current && !firstHandle) {
+            const sentence = firstSentence(ev.text);
+            if (sentence) {
+              // The ack shares the audio path — let it finish, then re-guard.
+              if (ackRef.current) {
+                await ackRef.current.done;
+                ackRef.current = null;
+              }
+              if (endedRef.current) throw new Error("ended");
+              spoken = sentence;
+              const h = speak(sentence, { voice: voiceForRound(roundType) });
+              firstHandle = h;
+              speakRef.current = h; // cleanup can cancel it before deliverTurn takes over
+              void h.firstSyllableAt.then(() => {
+                if (!failed && !endedRef.current) setPhase("speaking");
+              });
+            }
+          }
+        }
+        if (turn) {
+          void reader.cancel().catch(() => {});
+          break;
+        }
+        if (done) break;
+      }
+      if (!turn) throw new Error("stream_no_turn");
+      return { turn, live: firstHandle ? { handle: firstHandle, spoken } : null };
+    } catch (err) {
+      failed = true;
+      firstHandle?.cancel();
+      throw err;
+    } finally {
+      if (streamAbortRef.current === abort) streamAbortRef.current = null;
+    }
+  }, [requestBody, roundType]);
+
   const callInterviewer = useCallback(async () => {
     if (endedRef.current) return;
     setPhase("thinking");
     setError(null);
+    // Streaming-first. ANY streaming failure (error event, network, malformed)
+    // falls back to exactly ONE non-stream POST — today's path below, which
+    // carries the route's retry-once policy — so the interview never dies.
+    // Short replies whose turn lands before the first sentence completes
+    // behave exactly as before: deliverTurn speaks the full text once.
+    try {
+      const { turn, live } = await streamTurn();
+      if (endedRef.current) {
+        live?.handle.cancel();
+        return;
+      }
+      await deliverTurn(turn, null, false, live);
+      return;
+    } catch {
+      if (endedRef.current) return;
+      setPhase("thinking"); // a cancelled first utterance may have flipped visuals
+    }
     let turn: InterviewerTurn;
     try {
       const res = await fetch("/api/interview", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          role,
-          roundType,
-          candidateName,
-          ...(resume ? { resume } : {}),
-          history: historyRef.current,
-        }),
+        body: requestBody(historyRef.current, false),
       });
       if (!res.ok) {
         // 429 carries a friendly { message } (quota/slow-down) — expose it so
@@ -702,7 +863,7 @@ export function useInterviewMachine(
       return;
     }
     await deliverTurn(turn, null, false);
-  }, [candidateName, deliverTurn, role, roundType, resume]);
+  }, [deliverTurn, requestBody, streamTurn]);
 
   const endAnswer = useCallback(async () => {
     clearSilenceTimer();
@@ -911,7 +1072,8 @@ export function useInterviewMachine(
     scores,
     sessionPersisted,
     codingTurn,
-    codingQuestion: CODING_QUESTIONS[role],
+    // Spoken question, editor language, and starter all follow the chosen language.
+    codingQuestion: codingQuestionFor(role, extrasRef.current?.codeLanguage),
     persona: roundType === "technical" ? TECH_PERSONA : HR_PERSONA,
     degradePrefill,
     error,

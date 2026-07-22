@@ -322,6 +322,36 @@ export function speak(
   return systemSpeak(text, opts);
 }
 
+/** Voice pipelining (streamed turns): the first sentence is already speaking;
+ * chain the remainder as a second utterance under ONE composite handle.
+ * cancel() covers BOTH utterances (barge-in/cleanup must kill the chained tail
+ * too); firstSyllableAt/engineUsed are the FIRST utterance's — the latency
+ * anchor stays the first audible syllable. Additive: nothing existing changes. */
+export function chainSpeak(
+  first: SpeakHandle,
+  remainderText: string,
+  opts?: { rate?: number; voice?: string; hue?: [number, number, number] },
+): SpeakHandle {
+  let cancelled = false;
+  let second: SpeakHandle | null = null;
+  const done = (async () => {
+    await first.done;
+    if (cancelled || !remainderText) return;
+    second = speak(remainderText, opts);
+    await second.done;
+  })();
+  return {
+    done,
+    cancel() {
+      cancelled = true;
+      first.cancel();
+      second?.cancel();
+    },
+    firstSyllableAt: first.firstSyllableAt,
+    engineUsed: first.engineUsed,
+  };
+}
+
 export interface PreparedSpeech {
   /** Resolves once the audio is fetched + decoded — or once preparation gave
    * up (play() transparently falls back either way). Never rejects. */
