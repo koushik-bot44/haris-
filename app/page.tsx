@@ -74,6 +74,7 @@ export default function SetupPage() {
   const [kokoro, setKokoro] = useState("off");
   const [round, setRound] = useState<Round>("hr");
   const [codeLang, setCodeLang] = useState<CodeLanguage>("java");
+  const [bargeIn, setBargeIn] = useState(false);
   const [resume, setResume] = useState("");
   const [analysis, setAnalysis] = useState<{
     strengths: string[];
@@ -234,6 +235,7 @@ export default function SetupPage() {
         window.sessionStorage.removeItem("pds_resume_profile");
       }
       window.sessionStorage.setItem("pds_code_lang", codeLang);
+      window.sessionStorage.setItem("pds_barge_in", bargeIn ? "1" : "0");
     } catch {}
     const params = new URLSearchParams({ name: name.trim() || "Candidate", role, round });
     router.push(`/interview?${params.toString()}`);
@@ -485,6 +487,27 @@ export default function SetupPage() {
             )}
           </div>
         </fieldset>
+
+        {round !== "gd" && (
+          <label
+            className="card tinted"
+            style={{ display: "flex", gap: 12, alignItems: "flex-start", cursor: "pointer", padding: "12px 16px" }}
+          >
+            <input
+              type="checkbox"
+              checked={bargeIn}
+              onChange={(e) => setBargeIn(e.target.checked)}
+              style={{ marginTop: 3, width: 18, height: 18, flexShrink: 0 }}
+            />
+            <span>
+              <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Let me interrupt the interviewer</span>
+              <span className="choice-desc" style={{ display: "block" }}>
+                Off by default — she finishes each question, then you answer. Turn on only with headphones,
+                or room noise will cut her off mid-question.
+              </span>
+            </span>
+          </label>
+        )}
 
         <div>
           <button className="btn" style={{ width: "100%", fontSize: "1rem" }} onClick={start}>

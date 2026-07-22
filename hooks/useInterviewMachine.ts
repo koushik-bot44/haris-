@@ -47,9 +47,9 @@ const HR_PERSONA: Persona = { name: "Priya Sharma", title: "HR, Meridian Corp", 
 /** Setup-page extras (pinned sessionStorage keys) read ONCE at hook init and
  * sent on EVERY /api/interview body — live, speculative, and opening — so the
  * interviewer brain knows the candidate. Any parse failure means absent. */
-function readInterviewExtras(): { profile?: ResumeProfile; codeLanguage?: CodeLanguage } {
-  if (typeof window === "undefined") return {};
-  const extras: { profile?: ResumeProfile; codeLanguage?: CodeLanguage } = {};
+function readInterviewExtras(): { profile?: ResumeProfile; codeLanguage?: CodeLanguage; bargeIn: boolean } {
+  if (typeof window === "undefined") return { bargeIn: false };
+  const extras: { profile?: ResumeProfile; codeLanguage?: CodeLanguage; bargeIn: boolean } = { bargeIn: false };
   try {
     const raw = window.sessionStorage.getItem("pds_resume_profile");
     if (raw) extras.profile = JSON.parse(raw) as ResumeProfile;
@@ -59,6 +59,12 @@ function readInterviewExtras(): { profile?: ResumeProfile; codeLanguage?: CodeLa
     if (lang === "java" || lang === "python" || lang === "cpp" || lang === "javascript" || lang === "c") {
       extras.codeLanguage = lang;
     }
+  } catch {}
+  try {
+    // Barge-in (interrupting the interviewer while she speaks) is OFF by
+    // default: without headphones, room noise and her own voice through the
+    // speakers would cut her off mid-question. Opt in on the setup screen.
+    extras.bargeIn = window.sessionStorage.getItem("pds_barge_in") === "1";
   } catch {}
   return extras;
 }
@@ -205,7 +211,7 @@ export function useInterviewMachine(
   /** In-flight streaming interviewer fetch — cleanup aborts the SSE reader. */
   const streamAbortRef = useRef<AbortController | null>(null);
   /** Setup-page extras, read once (identical on every request this session). */
-  const extrasRef = useRef<{ profile?: ResumeProfile; codeLanguage?: CodeLanguage } | null>(null);
+  const extrasRef = useRef<{ profile?: ResumeProfile; codeLanguage?: CodeLanguage; bargeIn?: boolean } | null>(null);
   if (extrasRef.current === null) extrasRef.current = readInterviewExtras();
   /** Opening pre-warm fired during preroll (deterministic empty-history call). */
   const openingRef = useRef<PrefetchedTurn | null>(null);
@@ -296,7 +302,9 @@ export function useInterviewMachine(
         roundType,
         candidateName,
         ...(resume ? { resume } : {}),
-        ...(extrasRef.current ?? {}),
+        // bargeIn is a client-only preference — never sent to the interviewer.
+        ...(extrasRef.current?.profile ? { profile: extrasRef.current.profile } : {}),
+        ...(extrasRef.current?.codeLanguage ? { codeLanguage: extrasRef.current.codeLanguage } : {}),
         history,
         ...(stream ? { stream: true } : {}),
       }),
@@ -674,7 +682,11 @@ export function useInterviewMachine(
     // Echo filter reference = the turn text PLUS every ack/nudge line the app
     // itself speaks — self-audio must always be filtered, never an interrupt.
     const echoRefText = `${turn.text} ${Object.values(ACK_TEXTS).flat().join(" ")}`;
-    if (!textModeRef.current && !turn.done && !turn.coding) {
+    // Barge-in OFF by default: she speaks the FULL question uninterrupted, then
+    // the mic opens (post-TTS beginListening). Only run the live interrupt
+    // listener when the candidate opted in (headphones) — otherwise external
+    // noise cutting her off mid-question means they never hear it.
+    if (extrasRef.current?.bargeIn && !textModeRef.current && !turn.done && !turn.coding) {
       const holder: { sess: SttSession | null } = { sess: null };
       holder.sess = startStt({
         onUpdate: (s: SttState) => {
