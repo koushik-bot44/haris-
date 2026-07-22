@@ -10,7 +10,7 @@ import {
   QUESTIONS_PER_INTERVIEW,
 } from "@/lib/llm/interview-flow";
 import { EXPERIENCED_HR_QUESTIONS, FRESHER_HR_QUESTIONS, HR_QUESTIONS } from "@/lib/fixtures/hr-questions";
-import { technicalBank } from "@/lib/fixtures/technical-questions";
+import { CODING_INTRO, DSA_QUESTIONS, technicalBank } from "@/lib/fixtures/technical-questions";
 import { buildPrompt, claudeCliProvider } from "@/lib/llm/claude-cli";
 import type { HistoryEntry, InterviewerTurn, InterviewRequest, ResumeProfile, RolePreset } from "@/lib/types";
 
@@ -182,12 +182,16 @@ describe("resume-profile-driven flow", () => {
     expect(a.turns.map((t) => t.text)).toEqual(b.turns.map((t) => t.text));
   });
 
-  it("technical round with a profile keeps the coding slot at #3", () => {
+  it("technical round is DSA + coding only — no project dives, coding slot at #3", () => {
     const { turns } = playThrough(LONG_ANSWER, "technical", "java-sde-fresher", FRESHER_PROFILE);
     const coding = turns.filter((t) => t.coding);
     expect(coding.length).toBe(1);
     expect(coding[0].questionIndex).toBe(CODING_QUESTION_SLOT);
-    expect(turns.some((t) => t.text.includes("Placement Day Simulator"))).toBe(true);
+    // User directive: technical asks ONLY DSA + coding — dives stay in HR.
+    expect(turns.some((t) => t.text.includes("Placement Day Simulator"))).toBe(false);
+    const dsaTexts = new Set(DSA_QUESTIONS.map((q) => q.text));
+    const mains = turns.filter((t) => t.type === "question" && !t.coding && !t.text.startsWith(CODING_INTRO));
+    expect(mains.some((t) => dsaTexts.has(t.text))).toBe(true);
     expect(turns[turns.length - 1].type).toBe("wrapup");
   });
 

@@ -67,7 +67,9 @@ export function effectiveQuestions(
     // Dives land at slots 2-3: a bank opener first, then dig into their work.
     return [picked[0], ...dives, ...picked.slice(1)];
   }
-  const picked = seededPick(technicalBank(role), seed, QUESTIONS_PER_INTERVIEW - 1 - dives.length);
+  // Technical is DSA + coding ONLY (user directive) — no project dives here;
+  // resume anchoring lives in the DSA bank's phrasing and the coding language.
+  const picked = seededPick(technicalBank(role), seed, QUESTIONS_PER_INTERVIEW - 1);
   const codingQ = codingQuestionFor(role, codeLanguage);
   const codingEntry: FlowQuestion = {
     id: codingQ.id,
@@ -76,8 +78,7 @@ export function effectiveQuestions(
     expectKeywords: [],
     coding: true,
   };
-  // Technical: project dives open the round (the greeting points at them).
-  const out = [...dives, ...picked];
+  const out = [...picked];
   out.splice(CODING_QUESTION_SLOT - 1, 0, codingEntry);
   return out;
 }

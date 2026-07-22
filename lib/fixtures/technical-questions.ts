@@ -250,8 +250,76 @@ const FRONTEND_TECH: HrQuestion[] = [
   },
 ];
 
+
+// ——— DSA bank — the technical round asks DSA + coding ONLY (user directive).
+// One uniform bank across roles: the coding slot + resume anchoring carry the
+// role/language flavor; these probe how the candidate actually thinks.
+export const DSA_QUESTIONS: HrQuestion[] = [
+  {
+    id: 130,
+    text: "You need to find whether two numbers in an array sum to a target. Walk me through your approach and its complexity.",
+    followup: "Now the array is sorted — does your approach change, and why?",
+    expectKeywords: ["hash", "map", "o(n)", "two pointer", "complexity", "linear"],
+  },
+  {
+    id: 131,
+    text: "When would you pick a linked list over an array? Give me a concrete situation, not a definition.",
+    followup: "And what does that choice cost you — what gets slower?",
+    expectKeywords: ["insert", "delete", "index", "random access", "memory", "o(1)", "o(n)"],
+  },
+  {
+    id: 132,
+    text: "Explain how a hash map gets its average O(1) lookup — and when that promise breaks.",
+    followup: "How do collisions get handled, and what happens to complexity in the worst case?",
+    expectKeywords: ["hash", "bucket", "collision", "chaining", "probing", "o(n)", "load"],
+  },
+  {
+    id: 133,
+    text: "How would you check if a string is a palindrome ignoring spaces and case — and what's the complexity?",
+    followup: "Do it without creating a cleaned copy of the string. What changes?",
+    expectKeywords: ["two pointer", "o(n)", "lower", "reverse", "compare"],
+  },
+  {
+    id: 134,
+    text: "What makes recursion the right tool for tree problems? Walk me through finding the height of a binary tree.",
+    followup: "What breaks if the tree is a million nodes deep, and how do you defend against it?",
+    expectKeywords: ["base case", "recursive", "height", "stack", "overflow", "depth"],
+  },
+  {
+    id: 135,
+    text: "You have a million records and need the top ten by score. Sorting everything feels wasteful — what's better?",
+    followup: "What's the complexity of your approach versus a full sort?",
+    expectKeywords: ["heap", "priority", "o(n log k)", "partial", "quickselect"],
+  },
+  {
+    id: 136,
+    text: "Explain the sliding-window technique with a problem where it beats the brute force.",
+    followup: "How do you know when a problem is a sliding-window problem at all?",
+    expectKeywords: ["window", "subarray", "substring", "o(n)", "contiguous", "expand", "shrink"],
+  },
+  {
+    id: 137,
+    text: "A function works but is O(n squared) and too slow. Walk me through how you actually find and fix the bottleneck.",
+    followup: "Give me one real trade you'd accept to get to O(n log n) or O(n).",
+    expectKeywords: ["nested", "loop", "hash", "sort", "space", "time", "tradeoff"],
+  },
+  {
+    id: 138,
+    text: "When is a stack the right structure? Give me two genuinely different problems it solves cleanly.",
+    followup: "One of those — what would go wrong if you used a queue instead?",
+    expectKeywords: ["lifo", "parenthes", "undo", "call", "dfs", "reverse"],
+  },
+  {
+    id: 139,
+    text: "Binary search looks simple but people get it wrong constantly. What are the classic mistakes, and how do you avoid them?",
+    followup: "Write the loop condition and the mid calculation out loud — exactly.",
+    expectKeywords: ["sorted", "mid", "overflow", "boundary", "off by one", "log"],
+  },
+];
+
 export function technicalBank(role: RolePreset): HrQuestion[] {
-  if (role === "java-sde-fresher") return [...JAVA_TECH, ...COMMON_TECH];
-  if (role === "frontend-fresher") return [...FRONTEND_TECH, ...COMMON_TECH];
-  return COMMON_TECH;
+  // Role flavor lives in the coding slot + resume anchoring; the spoken
+  // questions are pure DSA for every role.
+  void role;
+  return [...DSA_QUESTIONS];
 }
