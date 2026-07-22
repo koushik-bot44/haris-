@@ -36,6 +36,7 @@ import {
 import { voiceForRound } from "@/lib/voices";
 import { codingQuestionFor, codingSeedFrom, TECH_PERSONA, type CodingQuestion } from "@/lib/fixtures/technical-questions";
 import { setVizMode, startMicViz, stopMicViz } from "@/lib/audio-viz";
+import { NO_ANSWER } from "@/lib/llm/parse";
 
 export interface Persona {
   name: string;
@@ -538,7 +539,7 @@ export function useInterviewMachine(
       // Nudge/ack lines played through the speakers can be re-transcribed at
       // the answer's edges (no echo filter on that path) — scrub them.
       const scrubbed = codingActiveRef.current ? transcript : stripAckEcho(transcript, ALL_ACK_LINES);
-      const text = scrubbed.trim() || "(no answer)";
+      const text = scrubbed.trim() || NO_ANSWER;
       // History entries are clamped to the schema cap so one giant pasted
       // answer can't 400 every later /api/interview call; turnsRef/answersRef
       // keep the full text for the transcript and scoring.
@@ -555,7 +556,7 @@ export function useInterviewMachine(
       // Code answers are fenced so the scorer and the interviewer both see
       // them as code, and the session records the coding module was exercised.
       let scoringText = text;
-      if (codingActiveRef.current && text !== "(no answer)") {
+      if (codingActiveRef.current && text !== NO_ANSWER) {
         codingUsedRef.current = true;
         scoringText = "```\n" + text + "\n```";
         historyRef.current[historyRef.current.length - 1].text = clampHistoryText(scoringText);
@@ -566,7 +567,7 @@ export function useInterviewMachine(
       // Background scoring: follow-up answers concatenate onto the parent
       // question's transcript (plan: one rubric entry per questionId).
       const q = currentQuestionRef.current;
-      if (q && text !== "(no answer)") {
+      if (q && text !== NO_ANSWER) {
         const combined = [combinedAnswersRef.current.get(q.id), scoringText].filter(Boolean).join(" ");
         combinedAnswersRef.current.set(q.id, combined);
         fireScoring(q.id, q.text, combined);

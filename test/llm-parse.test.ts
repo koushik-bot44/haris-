@@ -3,6 +3,8 @@ import {
   clampTurn,
   deriveProgress,
   HARD_STOP_ANSWERS,
+  isNoAnswer,
+  NO_ANSWER,
   parseInterviewerJson,
   parseStreamedTurn,
   transcriptFor,
@@ -219,5 +221,46 @@ describe("transcriptFor persona labeling", () => {
 
   it("labels the interviewer with the given persona name", () => {
     expect(transcriptFor(history, "Haris")).toBe("Haris: Hello.\nCandidate: Hi there.");
+  });
+});
+
+describe("silence is not an answer", () => {
+  // Reported from a live run: "in middle even i didn't gave answers also this
+  // thing directly going like answers are given by me". The room records
+  // "(no answer)" when a listening window closes in silence, and it used to
+  // count exactly like a real answer — so the stage machine marched forward
+  // and topics got consumed by saying nothing.
+  it("does not count (no answer) toward interview progress", () => {
+    const spoke: HistoryEntry[] = [
+      { speaker: "interviewer", text: "Q1" },
+      { speaker: "candidate", text: "a real answer about my project" },
+    ];
+    const silent: HistoryEntry[] = [
+      { speaker: "interviewer", text: "Q1" },
+      { speaker: "candidate", text: NO_ANSWER },
+    ];
+    expect(deriveProgress(spoke).answers).toBe(1);
+    expect(deriveProgress(silent).answers).toBe(0);
+    // Interviewer turns still count either way — the room did speak.
+    expect(deriveProgress(silent).interviewerTurns).toBe(1);
+  });
+
+  it("counts only the answers that were actually given", () => {
+    const mixed: HistoryEntry[] = [
+      { speaker: "interviewer", text: "Q1" },
+      { speaker: "candidate", text: NO_ANSWER },
+      { speaker: "interviewer", text: "Q1 again, simpler" },
+      { speaker: "candidate", text: "ok, I would use a hash map here" },
+      { speaker: "interviewer", text: "Q2" },
+      { speaker: "candidate", text: "  (no answer)  " },
+    ];
+    expect(deriveProgress(mixed).answers).toBe(1);
+  });
+
+  it("recognises the sentinel regardless of surrounding whitespace", () => {
+    expect(isNoAnswer(NO_ANSWER)).toBe(true);
+    expect(isNoAnswer("  (no answer)\n")).toBe(true);
+    expect(isNoAnswer("no answer")).toBe(false);
+    expect(isNoAnswer("I have no answer for that")).toBe(false);
   });
 });

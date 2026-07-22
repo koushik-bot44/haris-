@@ -5,6 +5,7 @@ import { clampTurn, deriveProgress, parseStreamedTurn } from "@/lib/llm/parse";
 import { computeNextTurn, CODING_QUESTION_SLOT, QUESTIONS_PER_INTERVIEW } from "@/lib/llm/interview-flow";
 import { CODING_INTRO, codingQuestionFor, codingSeedFrom } from "@/lib/fixtures/technical-questions";
 import { CODING_AFTER_ANSWERS } from "@/lib/llm/interview-stages";
+import { latestAnswer, recallBlock, recallCandidate, recallQuery, rememberAnswer } from "@/lib/memory";
 
 // Groq production provider — sub-second interviewer turns (measured: 0.7s
 // llama-3.3-70b full reply, 0.24s 8b-instant). Same prompt, same streamed
@@ -181,7 +182,15 @@ export const groqProvider = {
             }
           }
         : undefined;
-      const prompt = buildPrompt(req);
+      // Long-term memory, if it is configured. Cached per candidate and time
+      // boxed, so this is not a per-turn round trip; it degrades to "" on any
+      // failure and the interview proceeds exactly as it would without it.
+      const answer = latestAnswer(req.history);
+      const recalled = await recallCandidate(req.candidateName, recallQuery(req.history));
+      // Store AFTER recalling, so this session's answer cannot come straight
+      // back as if it were prior knowledge. Fire-and-forget.
+      if (answer) rememberAnswer(req.candidateName, req.roundType, answer);
+      const prompt = buildPrompt(req, recallBlock(recalled));
       const onDelta = emit
         ? (delta: string) => {
             buffer += delta;

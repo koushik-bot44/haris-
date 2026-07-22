@@ -183,12 +183,26 @@ export interface Progress {
   interviewerTurns: number;
 }
 
+/** Recorded by the room when a listening window closes with nothing said —
+ * silence, a failed mic, or the candidate giving up on a question. It is NOT an
+ * answer, and treating it as one is how an interview walks off without you. */
+export const NO_ANSWER = "(no answer)";
+
+export function isNoAnswer(text: string): boolean {
+  return text.trim() === NO_ANSWER;
+}
+
 export function deriveProgress(history: HistoryEntry[]): Progress {
   let answers = 0;
   let interviewerTurns = 0;
   for (const h of history) {
-    if (h.speaker === "candidate") answers++;
-    else interviewerTurns++;
+    // Silence must not advance the interview. It used to count exactly like a
+    // real answer, so a candidate who said nothing still watched the stage
+    // machine march forward and the topics get used up — "it's going as if I
+    // answered". Progress means answers, not turns.
+    if (h.speaker === "candidate") {
+      if (!isNoAnswer(h.text)) answers++;
+    } else interviewerTurns++;
   }
   return { answers, interviewerTurns };
 }

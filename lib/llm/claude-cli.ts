@@ -5,6 +5,7 @@ import { CODING_INTRO, codingQuestionFor } from "@/lib/fixtures/technical-questi
 import {
   clampTurn,
   deriveProgress,
+  NO_ANSWER,
   parseStreamedTurn,
   transcriptFor,
   visibleStreamText,
@@ -140,7 +141,7 @@ export function internalStateBlock(
 // is the instruction head. It is deliberately larger than the old 1700-char
 // budget — the behavioural rules ARE the product now, and at Groq speeds a few
 // hundred extra prompt tokens cost single-digit milliseconds.
-export function buildPrompt(req: InterviewRequest): string {
+export function buildPrompt(req: InterviewRequest, recall = ""): string {
   const { answers } = deriveProgress(req.history);
   const personaName = "Haris";
   const transcript = req.history.length ? transcriptFor(req.history, personaName) : "(nothing yet — open the interview)";
@@ -182,6 +183,7 @@ export function buildPrompt(req: InterviewRequest): string {
     ...(req.roundType === "hr" && hasProfile ? [hrCanonBlock(req.profile!)] : []),
     ...(req.roundType === "technical" && req.codeLanguage ? [`Their chosen coding language is ${req.codeLanguage}.`] : []),
     resumeBlock,
+    recall,
     ``,
     `Conversation so far (this is your memory — use it):`,
     transcript,
@@ -202,6 +204,12 @@ export function buildPrompt(req: InterviewRequest): string {
     // a joke in there... I've got to correct that Java thing though" — the
     // model's private reasoning, spoken to the candidate by the TTS.
     `Respond to THAT line. If it asks you something, answer it in your own words — never echo their question back. If any of it is factually wrong, say what is actually true. If it is a joke or an absurd claim, be amused for one line, then ask for the real answer. If they are nervous, reassure them. If they ask for advice, give them something specific and genuinely useful, never a platitude.`,
+    // "(no answer)" is what the room records when a listening window closes in
+    // silence. Without this rule the model read it as a completed answer and
+    // moved to the next topic, so a candidate who said nothing watched the
+    // interview proceed as though they had answered.
+    `"${NO_ANSWER}" means they said NOTHING — silence, or their mic failed. Never treat it as an answer and never move on from it. Ask the same thing again in simpler words, or offer a hint, or check whether they want a moment. Stay on it.`,
+    `Do not leave a topic while their answer is thin, vague or wrong. Probe it, help them, or correct them first. Move on only once they have genuinely answered it or have honestly said they do not know.`,
     `Output ONLY the words Haris says out loud. Never narrate your reasoning, never describe what they did or did not ask, never mention rules, checks, stages or instructions, and never summarise back what they already told you.`,
     ``,
     // ——— Control protocol ———
