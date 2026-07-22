@@ -4,8 +4,8 @@ import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } fro
 import { useRouter } from "next/navigation";
 import { extractPdfText, ResumeExtractError } from "@/lib/resume-extract";
 import { buildResumeProfile } from "@/lib/resume-profile";
-import { getVoiceEngine, hasStoredVoiceChoice, kokoroStatus, setVoiceEngine, type VoiceEngine } from "@/lib/tts";
-import { getPreferredVoice, setPreferredVoice } from "@/lib/voices";
+import { setVoiceEngine } from "@/lib/tts";
+import { setPreferredVoice } from "@/lib/voices";
 import type { CodeLanguage } from "@/lib/types";
 
 // Landing = the setup screen (binding UX spec). No marketing hero: the round
@@ -55,23 +55,11 @@ const CODE_LANGS: { id: CodeLanguage; label: string }[] = [
   { id: "c", label: "C" },
 ];
 
-// Curated studio voices (28 available on the local server — these four carry).
-const STUDIO_VOICES: { file: string; name: string; desc: string }[] = [
-  { file: "Elena.wav", name: "Elena", desc: "warm, steady — the default" },
-  { file: "Gianna.wav", name: "Gianna", desc: "bright, quick" },
-  { file: "Adrian.wav", name: "Adrian", desc: "low-key, thoughtful" },
-  { file: "Olivia.wav", name: "Olivia", desc: "crisp, formal" },
-];
 
 export default function SetupPage() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [role, setRole] = useState("general");
-  const [engine, setEngine] = useState<VoiceEngine>("system");
-  const [voiceFile, setVoiceFile] = useState<string | null>(null);
-  const [elevenAvailable, setElevenAvailable] = useState(false);
-  const [chatterboxAvailable, setChatterboxAvailable] = useState(false);
-  const [kokoro, setKokoro] = useState("off");
   const [round, setRound] = useState<Round>("hr");
   const [codeLang, setCodeLang] = useState<CodeLanguage>("java");
   const [bargeIn, setBargeIn] = useState(false);
@@ -168,35 +156,20 @@ export default function SetupPage() {
   };
 
   useEffect(() => {
-    setEngine(getVoiceEngine());
-    setVoiceFile(getPreferredVoice());
+    // One voice — Elena. Studio-quality when the local voice server is up,
+    // otherwise the fast on-device voice fills in silently. No picker.
+    setPreferredVoice("Elena.wav");
+    fetch("/api/tts")
+      .then((r) => r.json())
+      .then((d) => setVoiceEngine(d.chatterbox ? "chatterbox" : "kokoro"))
+      .catch(() => setVoiceEngine("kokoro"));
     // Restore a previously chosen coding language (set in-effect, not in the
     // initializer — sessionStorage reads during SSR/hydration would mismatch).
     try {
       const stored = window.sessionStorage.getItem("pds_code_lang");
       if (CODE_LANGS.some((l) => l.id === stored)) setCodeLang(stored as CodeLanguage);
     } catch {}
-    const probe = () =>
-      fetch("/api/tts")
-        .then((r) => r.json())
-        .then((d) => {
-          setElevenAvailable(Boolean(d.elevenlabs ?? d.enabled));
-          setChatterboxAvailable(Boolean(d.chatterbox));
-          // First visit + the local studio server is running → it IS the
-          // default (user verdict: the best voice available). An explicit
-          // choice is never overridden.
-          if (d.chatterbox && !hasStoredVoiceChoice()) {
-            setVoiceEngine("chatterbox");
-            setEngine("chatterbox");
-          }
-        })
-        .catch(() => {});
-    probe();
-    const probeId = setInterval(probe, 5000); // the local voice server may come up mid-visit
-    const id = setInterval(() => setKokoro(kokoroStatus()), 1000);
     return () => {
-      clearInterval(id);
-      clearInterval(probeId);
       if (autoAnalyzeTimerRef.current) clearTimeout(autoAnalyzeTimerRef.current);
     };
   }, []);
@@ -206,17 +179,6 @@ export default function SetupPage() {
     try {
       window.sessionStorage.setItem("pds_code_lang", lang);
     } catch {}
-  };
-
-  const pickEngine = (e: VoiceEngine) => {
-    setEngine(e);
-    setVoiceEngine(e);
-  };
-
-  const pickStudioVoice = (file: string) => {
-    pickEngine("chatterbox");
-    setPreferredVoice(file);
-    setVoiceFile(file);
   };
 
   const start = () => {
@@ -241,23 +203,10 @@ export default function SetupPage() {
     router.push(`/interview?${params.toString()}`);
   };
 
-  const studioSelected = engine === "chatterbox";
-  const activeStudioFile = voiceFile ?? "Elena.wav";
-
   const roundRadio = rovingRadio(
     ROUNDS.filter((r) => !(r.id === "gd" && !GD_ON)).map((r) => r.id),
     round,
     setRound,
-  );
-  const studioRadio = rovingRadio(
-    STUDIO_VOICES.map((v) => v.file),
-    studioSelected ? activeStudioFile : null,
-    pickStudioVoice,
-  );
-  const engineRadio = rovingRadio<VoiceEngine>(
-    ["kokoro", "system", ...(elevenAvailable ? (["elevenlabs"] as const) : [])],
-    engine,
-    pickEngine,
   );
 
   return (
@@ -409,84 +358,6 @@ export default function SetupPage() {
           </div>
         </details>
 
-        <fieldset style={{ border: 0, padding: 0, margin: 0 }} className="field">
-          <legend className="small" style={{ fontWeight: 600, padding: 0, marginBottom: 8 }}>
-            Interviewer voice
-          </legend>
-
-          {chatterboxAvailable ? (
-            <div role="radiogroup" aria-label="Studio voices" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              {STUDIO_VOICES.map((v) => (
-                <button
-                  key={v.file}
-                  role="radio"
-                  aria-checked={studioSelected && activeStudioFile === v.file}
-                  className="choice"
-                  onClick={() => pickStudioVoice(v.file)}
-                  {...studioRadio(v.file)}
-                >
-                  <span className="choice-title">
-                    {v.name}
-                    {v.file === "Elena.wav" && <span className="chip on"><span className="dot" />studio</span>}
-                  </span>
-                  <span className="choice-desc">{v.desc}</span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="card tinted small muted">
-              Studio voices are offline — start the local voice server (~/chatterbox-tts-server/run.sh) and
-              they light up here. Clone your own voice at localhost:8004.
-            </div>
-          )}
-
-          <div
-            role="radiogroup"
-            aria-label="Voice engine"
-            style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}
-          >
-            <button
-              role="radio"
-              aria-checked={engine === "kokoro"}
-              className="choice"
-              style={{ flex: "1 1 180px" }}
-              onClick={() => pickEngine("kokoro")}
-              {...engineRadio("kokoro")}
-            >
-              <span className="choice-title">On-device</span>
-              <span className="choice-desc">
-                Kokoro — natural, offline, ~80MB once
-                {engine === "kokoro" && kokoro === "loading" && " · downloading…"}
-                {engine === "kokoro" && kokoro === "ready" && " · ready"}
-                {engine === "kokoro" && kokoro === "failed" && " · failed — system voice fills in"}
-              </span>
-            </button>
-            <button
-              role="radio"
-              aria-checked={engine === "system"}
-              className="choice"
-              style={{ flex: "1 1 180px" }}
-              onClick={() => pickEngine("system")}
-              {...engineRadio("system")}
-            >
-              <span className="choice-title">System</span>
-              <span className="choice-desc">Instant, robotic. The floor.</span>
-            </button>
-            {elevenAvailable && (
-              <button
-                role="radio"
-                aria-checked={engine === "elevenlabs"}
-                className="choice"
-                style={{ flex: "1 1 180px" }}
-                onClick={() => pickEngine("elevenlabs")}
-                {...engineRadio("elevenlabs")}
-              >
-                <span className="choice-title">Cloud</span>
-                <span className="choice-desc">ElevenLabs</span>
-              </button>
-            )}
-          </div>
-        </fieldset>
 
         {round !== "gd" && (
           <label
