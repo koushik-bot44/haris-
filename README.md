@@ -136,14 +136,53 @@ fallback so a model outage never kills a session. See
 
 ---
 
-## Commands
+## Running the project — every command explained
+
+Run these from the project root (the folder with `package.json`).
+
+| Command | What it does | When to use it |
+|---------|--------------|----------------|
+| `npm install` | Downloads all dependencies into `node_modules/`. Run once after cloning, and again whenever `package.json` changes. | First thing after `git clone`. |
+| `npm run dev` | Starts the app in development mode at **http://localhost:3000** with hot-reload (edits show up instantly). | Day-to-day use and demos. |
+| `npm run build` | Compiles an optimized production build into `.next/`. | Before deploying, or to check the app compiles cleanly. |
+| `npm start` | Serves the production build (run `npm run build` first). Faster than dev mode. | Running the finished app. |
+| `npm test` | Runs the full test suite (344 unit tests) once and exits. | Verifying nothing is broken. |
+| `npm run test:watch` | Runs tests and re-runs them automatically as you edit. | While writing or fixing code. |
+
+### The normal flow for a teammate
 
 ```bash
-npm run dev      # start the app at http://localhost:3000
-npm run build    # production build
-npm start        # run the production build
-npm test         # run the test suite (344 unit tests)
+git clone https://github.com/koushik-bot44/haris-.git
+cd haris-
+npm install          # one time, ~1 minute
+npm run dev          # then open http://localhost:3000 in Chrome
 ```
+
+Press **Ctrl-C** in the terminal to stop the server.
+
+## Troubleshooting (if you get an error)
+
+- **`command not found: npm`** — Node.js isn't installed. Install it from
+  [nodejs.org](https://nodejs.org) (the LTS version), then reopen your terminal.
+- **`npm install` fails or is slow** — check your internet, then try again. If it
+  still fails, delete `node_modules/` and `package-lock.json` and re-run
+  `npm install`.
+- **`Error: Port 3000 is already in use`** — another app is on that port. Either
+  stop it, or run on a different port: `npm run dev -- -p 3001` (then open
+  `http://localhost:3001`).
+- **The interviewer gives generic/scripted questions** — that's the no-key mode.
+  Add a free Groq key (see "Make it smart" above) for the adaptive AI interviewer.
+- **No microphone / mic denied** — the app automatically switches to **text mode**;
+  the interview still works, you just type your answers. To use voice, allow the
+  mic when Chrome asks (or click the address-bar lock icon → Microphone → Allow).
+- **Voice sounds robotic** — the premium studio voice needs the optional local
+  Chatterbox server. Without it you get the on-device Kokoro voice, which is still
+  natural — it just takes ~80MB to download the first time.
+- **The AI voice keeps getting cut off** — leave the "Let me interrupt the
+  interviewer" box **unchecked** on the setup screen (it's off by default). Only
+  turn it on if you're wearing headphones.
+- **Use Google Chrome** — voice input uses Chrome's speech API. Other browsers
+  fall back to on-device Whisper, which works but is slower to start.
 
 ## Project layout
 
