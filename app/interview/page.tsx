@@ -86,17 +86,10 @@ function InterviewRoom() {
 
   return (
     <main className="wrap">
-      <header style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 12 }}>
-        <div className={`monogram ${m.phase === "speaking" ? "speaking" : ""}`} aria-hidden style={{ width: 44, height: 44, fontSize: "1rem" }}>
-          {m.persona.initials}
+      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, marginBottom: 12 }}>
+        <div className="small muted mono-num">
+          {m.questionIndex > 0 && m.phase !== "done" ? `Question ${m.questionIndex} of 5` : ""}
         </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: "1.1rem" }}>{m.persona.name}</div>
-          <div className="small muted">{m.persona.title} — mock round</div>
-        </div>
-        {m.questionIndex > 0 && m.phase !== "done" && (
-          <div className="small muted mono-num">Question {m.questionIndex} of 5</div>
-        )}
         <button className="btn secondary" onClick={leave}>
           Leave
         </button>
