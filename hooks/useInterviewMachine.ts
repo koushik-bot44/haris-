@@ -12,14 +12,24 @@ import type {
   Turn,
 } from "@/lib/types";
 import { composeOverall } from "@/lib/rubric";
-import { getSttEngine, setSttEngine, startStt, type SttSession } from "@/lib/stt";
+import { getSttEngine, setSttEngineEphemeral, startStt, type SttSession } from "@/lib/stt";
 import { ensureWhisperLoading } from "@/lib/stt-whisper";
 import { fullTranscript, type SttState } from "@/lib/stt-reducer";
-import { speak, type SpeakHandle } from "@/lib/tts";
+import { prepareSpeak, speak, type PreparedSpeech, type SpeakHandle } from "@/lib/tts";
 import { decideBargeIn, echoOverlap, ECHO_OVERLAP_THRESHOLD } from "@/lib/barge-in";
 import { aggregateMetrics, computeDeliveryMetrics, METRICS_VERSION } from "@/lib/metrics";
 import { newSessionId, saveSession } from "@/lib/session-store";
-import { playAck, prepareAcks, resetAcks } from "@/lib/ack";
+import { ACK_TEXTS, playAck, prepareAcks, resetAcks, type AckHandle, type AckKind } from "@/lib/ack";
+import { clampHistoryText, keepTail, stripAckEcho, stripSpeechTags } from "@/lib/speakable";
+import {
+  acceptSpeculation,
+  countWords,
+  decideListenAction,
+  PAUSE_END_MS,
+  shouldSpeculate,
+  type ListenSnapshot,
+} from "@/lib/conversation";
+import { voiceForRound } from "@/lib/voices";
 import { CODING_QUESTIONS, TECH_PERSONA, type CodingQuestion } from "@/lib/fixtures/technical-questions";
 import { setVizMode, startMicViz, stopMicViz } from "@/lib/audio-viz";
 
@@ -31,11 +41,37 @@ export interface Persona {
 
 const HR_PERSONA: Persona = { name: "Priya Sharma", title: "HR, Meridian Corp", initials: "PS" };
 
+/** /api/score's answer cap — the SENT answer keeps the newest tail. */
+const SCORE_ANSWER_MAX_CHARS = 8000;
+/** /api/score's questionId cap. */
+const MAX_QUESTION_ID = 20;
+/** Every ack/nudge line the interviewer can play — echo-scrub targets. */
+const ALL_ACK_LINES = Object.values(ACK_TEXTS).flat();
+
+/** Escape hatch: flip to false to disable ALL speculative pre-generation
+ * (opening pre-warm + mid-answer speculation). The normal path is untouched. */
+const SPECULATE = true;
+
+/** An in-flight speculative /api/interview call plus its pre-synthesized audio.
+ * Used both for the opening pre-warm (empty history, basisWords 0) and for
+ * mid-answer speculation against the partial transcript. */
+interface PrefetchedTurn {
+  /** Word count of the partial transcript the request was based on. */
+  basisWords: number;
+  /** Resolves with the turn — or null on any failure/cancel (always silent). */
+  turnPromise: Promise<InterviewerTurn | null>;
+  /** Set once the turn resolves: ahead-of-time fetched + decoded audio. */
+  prepared: PreparedSpeech | null;
+  cancelled: boolean;
+  cancel(): void;
+}
+
 // The interview room state machine from the plan:
 // micCheck → preroll → thinking → speaking → listening → … → done
-// Turn-taking is automatic: the 1.5s silence timer ends an answer; the only
-// controls are "end answer now" and "leave". No mic toggle — a toggle would
-// lie about the interaction model.
+// Turn-taking is automatic: the listen policy (lib/conversation.ts) ends an
+// answer after a pause, nudges a silent or thin answer, and gives up after
+// prolonged silence; the only controls are "end answer now" and "leave". No
+// mic toggle — a toggle would lie about the interaction model.
 
 export type Phase =
   | "micCheck"
@@ -46,7 +82,7 @@ export type Phase =
   | "connectionLost"
   | "done";
 
-export const SILENCE_MS = 1500;
+export const SILENCE_MS = PAUSE_END_MS;
 
 interface AnswerRecord {
   transcript: string;
@@ -63,6 +99,12 @@ export interface InterviewMachine {
   questionIndex: number;
   turnCount: number;
   latencies: number[];
+  /** Parallel to latencies: true when that turn's TTS fell back off the
+   * primary engine chain — its number is real but polluted (report excludes). */
+  fallbackFlags: boolean[];
+  /** Parallel to latencies: true when that turn was served from a speculative
+   * pre-generated turn (the sub-second path) — UI can badge it "instant". */
+  instantFlags: boolean[];
   avgLatencyMs: number | null;
   micCheckTranscript: string;
   session: Session | null;
@@ -103,6 +145,8 @@ export function useInterviewMachine(
   const [hearing, setHearing] = useState(false);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [latencies, setLatencies] = useState<number[]>([]);
+  const [fallbackFlags, setFallbackFlags] = useState<boolean[]>([]);
+  const [instantFlags, setInstantFlags] = useState<boolean[]>([]);
   const [micCheckTranscript, setMicCheckTranscript] = useState("");
   const [session, setSession] = useState<Session | null>(null);
   const [sessionPersisted, setSessionPersisted] = useState(true);
@@ -116,7 +160,7 @@ export function useInterviewMachine(
   const micCheckSttRef = useRef<SttSession | null>(null);
   const silenceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const speakRef = useRef<SpeakHandle | null>(null);
-  const ackRef = useRef<SpeakHandle | null>(null);
+  const ackRef = useRef<AckHandle | null>(null);
   const answerStartTRef = useRef(0);
   const answerEndTRef = useRef<number | null>(null);
   const endedRef = useRef(false);
@@ -127,6 +171,10 @@ export function useInterviewMachine(
   /** Live mic session that runs WHILE Priya speaks — barge-in + early-start capture. */
   const interruptSttRef = useRef<SttSession | null>(null);
   const ttsTurnStartRef = useRef<number | null>(null);
+  /** Newest mid-answer speculation — older ones are cancelled on replacement. */
+  const specRef = useRef<PrefetchedTurn | null>(null);
+  /** Opening pre-warm fired during preroll (deterministic empty-history call). */
+  const openingRef = useRef<PrefetchedTurn | null>(null);
   const codingActiveRef = useRef(false);
   const codingUsedRef = useRef(false);
   // Background scoring state: one rubric entry per main question; follow-up
@@ -143,6 +191,9 @@ export function useInterviewMachine(
   // adversarial review confirmed in this file.
   const watchSilenceRef = useRef<(sess: SttSession) => void>(() => {});
   const adoptSessionRef = useRef<(sess: SttSession) => void>(() => {});
+  // Conversation-dynamics state, reset per listening session by watchSilence.
+  const nudgeCountRef = useRef(0);
+  const lastNudgeTRef = useRef<number | null>(null);
 
   const clearSilenceTimer = () => {
     if (silenceTimerRef.current) {
@@ -161,6 +212,10 @@ export function useInterviewMachine(
     } catch {}
     speakRef.current?.cancel();
     ackRef.current?.cancel();
+    specRef.current?.cancel();
+    specRef.current = null;
+    openingRef.current?.cancel();
+    openingRef.current = null;
     stopMicViz();
     setVizMode("idle");
   }, []);
@@ -175,19 +230,70 @@ export function useInterviewMachine(
   }, [cleanup]);
 
   const degradeToText = useCallback((reason: string) => {
+    // Text mode never accepts a speculative turn — kill any in flight so the
+    // fetch and the prepared audio don't dangle.
+    specRef.current?.cancel();
+    specRef.current = null;
     // A network/unsupported failure means THIS BROWSER can't reach Google's
     // speech service (Brave, Arc, plain Chromium, VPNs) — flip to the
     // on-device Whisper engine and start its one-time download. Text mode
     // covers the meantime; "Try microphone again" routes via Whisper once
     // the badge says ready.
+    // Session-only switch: a transient outage must not permanently flip the
+    // stored preference (setSttEngine is reserved for explicit user choice).
     if ((reason === "network" || reason === "unsupported") && getSttEngine() !== "whisper") {
-      setSttEngine("whisper");
+      setSttEngineEphemeral("whisper");
       ensureWhisperLoading();
     }
     textModeRef.current = true;
     setTextMode(true);
     setDegradeReason(reason);
   }, []);
+
+  /** Fire a speculative /api/interview call NOW and pre-synthesize its reply
+   * audio. The request body is IDENTICAL to what callInterviewer would send
+   * with this history — that identity is what makes acceptance sound. Failures
+   * resolve to null and are silent: the normal path is never affected. */
+  const prefetchTurn = useCallback(
+    (history: HistoryEntry[], basisWords: number): PrefetchedTurn => {
+      const abort = new AbortController();
+      const spec: PrefetchedTurn = {
+        basisWords,
+        turnPromise: Promise.resolve(null),
+        prepared: null,
+        cancelled: false,
+        cancel() {
+          spec.cancelled = true;
+          abort.abort();
+          spec.prepared?.cancel();
+          spec.prepared = null;
+        },
+      };
+      spec.turnPromise = fetch("/api/interview", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          role,
+          roundType,
+          candidateName,
+          ...(resume ? { resume } : {}),
+          history,
+        }),
+        signal: abort.signal,
+      })
+        .then((r) => (r.ok ? (r.json() as Promise<{ turn: InterviewerTurn }>) : null))
+        .then((d) => {
+          if (!d?.turn || spec.cancelled || endedRef.current) return null;
+          // Pre-synthesize from the RAW text (paralinguistic tags included),
+          // exactly like the live speak() path; captions strip tags at delivery.
+          spec.prepared = prepareSpeak(d.turn.text, { voice: voiceForRound(roundType) });
+          return d.turn;
+        })
+        .catch(() => null); // speculation failures are silent by design
+      return spec;
+    },
+    [candidateName, resume, role, roundType],
+  );
 
   // ——— mic check ———
 
@@ -215,9 +321,15 @@ export function useInterviewMachine(
     // and pre-generate engine-native acks so they play instantly later.
     if (!textModeRef.current) void startMicViz();
     resetAcks();
-    void prepareAcks();
+    void prepareAcks(voiceForRound(roundType));
+    // Pre-warm the opening: the first interviewer call is deterministic (empty
+    // history), so fire it AND synthesize its audio during preroll — the
+    // greeting starts the instant the candidate clicks start.
+    if (SPECULATE && !openingRef.current) {
+      openingRef.current = prefetchTurn([], 0);
+    }
     setPhase("preroll");
-  }, []);
+  }, [prefetchTurn, roundType]);
 
   /** The road back: mic problems must never be a one-way door into text mode.
    * Re-arms voice; from mic-check the user re-runs the check, mid-interview
@@ -287,6 +399,8 @@ export function useInterviewMachine(
   }, [cleanup, role, roundType]);
 
   const latListRef = useRef<number[]>([]);
+  const fallbackListRef = useRef<boolean[]>([]);
+  const instantListRef = useRef<boolean[]>([]);
   const latenciesRef = () => latListRef.current;
 
   const beginListening = useCallback(() => {
@@ -332,7 +446,9 @@ export function useInterviewMachine(
     const p = fetch("/api/score", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ questionId: qid, question, answer: combinedAnswer }),
+      // Over-long combined answers send the newest tail (schema cap); the
+      // stored transcript stays full.
+      body: JSON.stringify({ questionId: qid, question, answer: keepTail(combinedAnswer, SCORE_ANSWER_MAX_CHARS) }),
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { entry?: RubricEntry; tooShort?: boolean } | null) => {
@@ -350,8 +466,14 @@ export function useInterviewMachine(
 
   const recordAnswer = useCallback(
     (transcript: string, trace: SttTraceEvent[], endT: number) => {
-      const text = transcript.trim() || "(no answer)";
-      historyRef.current.push({ speaker: "candidate", text });
+      // Nudge/ack lines played through the speakers can be re-transcribed at
+      // the answer's edges (no echo filter on that path) — scrub them.
+      const scrubbed = codingActiveRef.current ? transcript : stripAckEcho(transcript, ALL_ACK_LINES);
+      const text = scrubbed.trim() || "(no answer)";
+      // History entries are clamped to the schema cap so one giant pasted
+      // answer can't 400 every later /api/interview call; turnsRef/answersRef
+      // keep the full text for the transcript and scoring.
+      historyRef.current.push({ speaker: "candidate", text: clampHistoryText(text) });
       turnsRef.current.push({
         speaker: "candidate",
         text,
@@ -367,7 +489,7 @@ export function useInterviewMachine(
       if (codingActiveRef.current && text !== "(no answer)") {
         codingUsedRef.current = true;
         scoringText = "```\n" + text + "\n```";
-        historyRef.current[historyRef.current.length - 1].text = scoringText;
+        historyRef.current[historyRef.current.length - 1].text = clampHistoryText(scoringText);
         codingActiveRef.current = false;
         setCodingTurn(false);
       }
@@ -390,47 +512,35 @@ export function useInterviewMachine(
     ackRef.current = playAck();
   }, []);
 
-  const callInterviewer = useCallback(async () => {
-    if (endedRef.current) return;
-    setPhase("thinking");
-    setError(null);
-    let turn: InterviewerTurn;
-    try {
-      const res = await fetch("/api/interview", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          role,
-          roundType,
-          candidateName,
-          ...(resume ? { resume } : {}),
-          history: historyRef.current,
-        }),
-      });
-      if (!res.ok) throw new Error(`api_${res.status}`);
-      const data = (await res.json()) as { turn: InterviewerTurn };
-      turn = data.turn;
-    } catch {
-      // A retried turn must not record the outage + human reaction time as
-      // interviewer latency — drop the anchor for this turn.
-      answerEndTRef.current = null;
-      if (!endedRef.current) setPhase("connectionLost");
+  /** Deliver an interviewer turn: history/captions/phase, speak it (prepared
+   * speculative audio when supplied), latency accounting, live-mic barge-in,
+   * then hand off to listening / finish. Extracted from callInterviewer so the
+   * speculative accepted path reuses the exact same pipeline. */
+  const deliverTurn = useCallback(async (turn: InterviewerTurn, prepared: PreparedSpeech | null, fromCache: boolean) => {
+    if (endedRef.current) {
+      prepared?.cancel();
       return;
     }
-    if (endedRef.current) return;
 
-    historyRef.current.push({ speaker: "interviewer", text: turn.text });
+    // Captions, history, and stored turns carry the clean text; only speak()
+    // receives the raw text with Chatterbox paralinguistic tags ([chuckle] …).
+    const cleanText = stripSpeechTags(turn.text);
+    historyRef.current.push({ speaker: "interviewer", text: clampHistoryText(cleanText) });
     const tStart = Date.now();
-    setCaption(turn.text);
+    setCaption(cleanText);
     setQuestionIndex(turn.questionIndex);
     codingActiveRef.current = Boolean(turn.coding);
     setCodingTurn(Boolean(turn.coding));
     // Track which main question the next answer belongs to (scoring identity):
     // a follow-up keeps the parent question's id and text.
+    // Ids clamped to /api/score's cap — deep-dive rounds can outrun it.
     if (turn.type === "question") {
-      currentQuestionRef.current = { id: turn.questionIndex || (currentQuestionRef.current?.id ?? 0) + 1, text: turn.text };
+      currentQuestionRef.current = {
+        id: Math.min(MAX_QUESTION_ID, turn.questionIndex || (currentQuestionRef.current?.id ?? 0) + 1),
+        text: cleanText,
+      };
     } else if (turn.type === "followup" && currentQuestionRef.current === null) {
-      currentQuestionRef.current = { id: Math.max(1, turn.questionIndex), text: turn.text };
+      currentQuestionRef.current = { id: Math.min(MAX_QUESTION_ID, Math.max(1, turn.questionIndex)), text: cleanText };
     }
     setPhase("speaking");
 
@@ -442,9 +552,14 @@ export function useInterviewMachine(
     }
     // The user may have left during the ack — every suspension point needs the
     // guard, or the next question speaks over the home page.
-    if (endedRef.current) return;
+    if (endedRef.current) {
+      prepared?.cancel();
+      return;
+    }
 
-    const handle = speak(turn.text);
+    // Prepared (speculative) audio schedules instantly; play() itself falls
+    // back to live speak() when preparation failed or hasn't finished.
+    const handle = prepared ? prepared.play() : speak(turn.text, { voice: voiceForRound(roundType) });
     speakRef.current = handle;
     ttsTurnStartRef.current = null;
     handle.firstSyllableAt.then((t) => {
@@ -452,13 +567,24 @@ export function useInterviewMachine(
     });
 
     // Latency = student's last word → interviewer's first syllable (plan anchor).
+    // A TTS fallback off the primary chain (chatterbox/elevenlabs/kokoro) still
+    // records its latency, but flagged — the report can exclude polluted numbers.
     if (answerEndTRef.current !== null) {
       const endT = answerEndTRef.current;
       answerEndTRef.current = null;
-      handle.firstSyllableAt.then((t) => {
+      Promise.all([handle.firstSyllableAt, handle.engineUsed]).then(([t, used]) => {
         if (endedRef.current) return;
         latListRef.current = [...latListRef.current, Math.max(0, t - endT)];
+        fallbackListRef.current = [
+          ...fallbackListRef.current,
+          used !== "chatterbox" && used !== "elevenlabs" && used !== "kokoro",
+        ];
+        // No special-casing: an accepted speculation records its genuinely
+        // tiny answerEnd→firstSyllable number; the flag only labels it.
+        instantListRef.current = [...instantListRef.current, fromCache];
         setLatencies(latListRef.current);
+        setFallbackFlags(fallbackListRef.current);
+        setInstantFlags(instantListRef.current);
       });
     }
 
@@ -512,7 +638,7 @@ export function useInterviewMachine(
     }
 
     await handle.done;
-    turnsRef.current.push({ speaker: "interviewer", text: turn.text, tStart, tEnd: Date.now() });
+    turnsRef.current.push({ speaker: "interviewer", text: cleanText, tStart, tEnd: Date.now() });
     if (endedRef.current) return;
 
     if (turn.done) {
@@ -535,7 +661,48 @@ export function useInterviewMachine(
       }
       beginListening();
     }
-  }, [beginListening, candidateName, degradeToText, finishInterview, role, roundType, resume]);
+  }, [beginListening, degradeToText, finishInterview, roundType]);
+
+  const callInterviewer = useCallback(async () => {
+    if (endedRef.current) return;
+    setPhase("thinking");
+    setError(null);
+    let turn: InterviewerTurn;
+    try {
+      const res = await fetch("/api/interview", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          role,
+          roundType,
+          candidateName,
+          ...(resume ? { resume } : {}),
+          history: historyRef.current,
+        }),
+      });
+      if (!res.ok) {
+        // 429 carries a friendly { message } (quota/slow-down) — expose it so
+        // the room can render it instead of the generic connection-lost copy.
+        if (res.status === 429) {
+          const msg = await res
+            .json()
+            .then((d: { message?: unknown }) => (typeof d?.message === "string" ? d.message : null))
+            .catch(() => null);
+          if (msg && !endedRef.current) setError(msg);
+        }
+        throw new Error(`api_${res.status}`);
+      }
+      const data = (await res.json()) as { turn: InterviewerTurn };
+      turn = data.turn;
+    } catch {
+      // A retried turn must not record the outage + human reaction time as
+      // interviewer latency — drop the anchor for this turn.
+      answerEndTRef.current = null;
+      if (!endedRef.current) setPhase("connectionLost");
+      return;
+    }
+    await deliverTurn(turn, null, false);
+  }, [candidateName, deliverTurn, role, roundType, resume]);
 
   const endAnswer = useCallback(async () => {
     clearSilenceTimer();
@@ -546,12 +713,36 @@ export function useInterviewMachine(
     // buffered audio — the last words of the answer arrive AFTER stop().
     speakAck();
     const st = await sess.stopAndSettle();
-    if (endedRef.current) return;
+    if (endedRef.current) return; // cleanup already cancelled any speculation
+    // Consume the newest speculation only AFTER settle — the ticker is dead
+    // (clearSilenceTimer above), so no fresher one can appear underneath us.
+    const spec = specRef.current;
+    specRef.current = null;
     const transcript = fullTranscript(st);
+    // The FINAL transcript goes to history/answers — scoring and the LLM's
+    // next call always see the truth, never the speculative partial.
     recordAnswer(transcript, st.trace, st.lastSpeechT ?? Date.now());
+    if (spec && !spec.cancelled && acceptSpeculation(spec.basisWords, countWords(transcript))) {
+      // The candidate barely added words after the speculative basis: the
+      // cached turn is still the right reply — skip the live LLM call and play
+      // the pre-decoded audio. This is the sub-second path.
+      setPhase("thinking");
+      setError(null);
+      const turn = await spec.turnPromise;
+      if (endedRef.current) {
+        spec.cancel();
+        return;
+      }
+      if (turn) {
+        void deliverTurn(turn, spec.prepared, true);
+        return;
+      }
+      // Speculative request failed silently — fall through to the normal path.
+    }
+    spec?.cancel();
     void callInterviewer();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [callInterviewer, recordAnswer, speakAck]);
+  }, [callInterviewer, deliverTurn, recordAnswer, speakAck]);
 
   const endAnswerNow = useCallback(() => {
     if (phase !== "listening") return;
@@ -586,12 +777,73 @@ export function useInterviewMachine(
   // memoized callbacks call through the ref instead of capturing directly.
   watchSilenceRef.current = (sess: SttSession) => {
     clearSilenceTimer();
+    // Defensive: a speculation from a previous answer must never survive into
+    // a fresh listening session (endAnswer normally consumed it already).
+    specRef.current?.cancel();
+    specRef.current = null;
+    nudgeCountRef.current = 0;
+    lastNudgeTRef.current = null;
+    const listenStartT = Date.now();
     silenceTimerRef.current = setInterval(() => {
       const st = sess.getState();
-      const hasSpeech = st.finalSegments.length > 0 || st.interim.trim().length > 0;
-      if (st.lastSpeechT && hasSpeech && Date.now() - st.lastSpeechT > SILENCE_MS) {
-        void endAnswer();
+      const now = Date.now();
+      let msSinceLastSpeech: number | null = null;
+      if (st.lastSpeechT !== null) {
+        // A nudge refreshes the pause anchor: the candidate gets a full fresh
+        // window to react instead of being cut off on the very next tick.
+        msSinceLastSpeech = now - Math.max(st.lastSpeechT, lastNudgeTRef.current ?? 0);
       }
+      const snapshot: ListenSnapshot = {
+        msSinceListenStart: now - listenStartT,
+        msSinceLastSpeech,
+        words: countWords(fullTranscript(st)),
+        nudges: nudgeCountRef.current,
+      };
+      const action = decideListenAction(snapshot);
+      if (action === "wait") {
+        // Draft-point speculation: a natural mid-answer pause (≥800ms, enough
+        // words) means the answer is probably nearly done — fire the next
+        // interviewer turn against the PARTIAL transcript and pre-synthesize
+        // its audio. Only the newest speculation survives; endAnswer accepts
+        // it only if the final transcript barely grew (lib/conversation.ts).
+        if (
+          SPECULATE &&
+          !textModeRef.current &&
+          !codingActiveRef.current &&
+          shouldSpeculate(snapshot, specRef.current?.basisWords ?? null)
+        ) {
+          specRef.current?.cancel();
+          const partial = fullTranscript(st).trim();
+          // Same history the real call would send, except the answer text is
+          // the partial — recordAnswer later pushes the FINAL text, so an
+          // accepted turn's NEXT call still sees the truth.
+          specRef.current = prefetchTurn(
+            [...historyRef.current, { speaker: "candidate", text: clampHistoryText(partial) }],
+            snapshot.words,
+          );
+        }
+        return;
+      }
+      if (action === "end_answer" || action === "give_up") {
+        // give_up: empty transcript records "(no answer)" — the existing
+        // too-short path already keeps it out of scoring.
+        void endAnswer();
+        return;
+      }
+      // Nudges are EPHEMERAL vocal encouragement: spoken + captioned but never
+      // pushed to historyRef or turnsRef — interview-flow readPosition finds
+      // its place by text-matching questions in history, and injected nudge
+      // lines would derail it. The mic stays live throughout.
+      nudgeCountRef.current += 1;
+      lastNudgeTRef.current = now;
+      const kind: AckKind = action === "offer_rephrase" ? "rephrase" : "encourage";
+      const h = playAck(kind);
+      ackRef.current = h;
+      setCaption(h?.text ?? ACK_TEXTS[kind][0]);
+      // Re-anchor at playback end so the reaction window excludes the nudge audio.
+      h?.done.then(() => {
+        lastNudgeTRef.current = Date.now();
+      });
     }, 250);
   };
   adoptSessionRef.current = (sess: SttSession) => {
@@ -607,8 +859,31 @@ export function useInterviewMachine(
   const startInterview = useCallback(() => {
     if (startedRef.current) return;
     startedRef.current = true;
+    // Pre-warmed opening (fired during preroll): the greeting audio is already
+    // fetched + decoded, so the interviewer speaks the instant of the click.
+    const opening = openingRef.current;
+    openingRef.current = null;
+    if (opening && !opening.cancelled) {
+      void (async () => {
+        setPhase("thinking");
+        setError(null);
+        const turn = await opening.turnPromise;
+        if (endedRef.current) {
+          opening.cancel();
+          return;
+        }
+        if (turn) {
+          void deliverTurn(turn, opening.prepared, true);
+          return;
+        }
+        // Pre-warm failed silently — the normal path owns retry/connectionLost.
+        opening.cancel();
+        void callInterviewer();
+      })();
+      return;
+    }
     void callInterviewer();
-  }, [callInterviewer]);
+  }, [callInterviewer, deliverTurn]);
 
   const retryConnection = useCallback(() => {
     void callInterviewer();
@@ -628,6 +903,8 @@ export function useInterviewMachine(
     questionIndex,
     turnCount: turnsRef.current.length,
     latencies,
+    fallbackFlags,
+    instantFlags,
     avgLatencyMs,
     micCheckTranscript,
     session,

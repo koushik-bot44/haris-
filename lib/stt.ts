@@ -40,7 +40,11 @@ export function sttSupported(): boolean {
 const STT_ENGINE_KEY = "pds_stt_engine";
 export type SttEngine = "auto" | "chrome" | "whisper";
 
+/** Session-only override (see setSttEngineEphemeral) — never persisted. */
+let ephemeralEngine: SttEngine | null = null;
+
 export function getSttEngine(): SttEngine {
+  if (ephemeralEngine !== null) return ephemeralEngine;
   if (typeof window === "undefined") return "auto";
   try {
     const v = window.localStorage.getItem(STT_ENGINE_KEY);
@@ -50,10 +54,18 @@ export function getSttEngine(): SttEngine {
   }
 }
 
+/** Persist an explicit user preference. */
 export function setSttEngine(engine: SttEngine): void {
   try {
     window.localStorage.setItem(STT_ENGINE_KEY, engine);
   } catch {}
+}
+
+/** Engine switch for the CURRENT visit only (e.g. a transient network degrade
+ * routes to Whisper). localStorage is untouched, so one flaky moment never
+ * permanently flips the browser off Chrome's recognizer. null clears it. */
+export function setSttEngineEphemeral(engine: SttEngine | null): void {
+  ephemeralEngine = engine;
 }
 
 export interface SttSession {
