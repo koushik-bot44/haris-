@@ -20,9 +20,31 @@ export interface Stage {
   goal: string;
 }
 
+/** The one stage where the candidate holds the floor and Haris has to answer
+ * rather than assess.
+ *
+ * Every other stage extracts; this one reverses the direction information
+ * flows, which is what "two-sided" actually means. Real interviews budget it
+ * explicitly — a 45-minute round gives candidate questions a hard 5-minute
+ * block, about 11% of the interview — and recruiters weigh what a candidate
+ * asks. Haris used to fold it into one clause of the wrap-up ("invite any
+ * questions, then finish"), which in practice meant it was skipped.
+ *
+ * Shared by both rounds because it belongs in both. */
+const CANDIDATE_QUESTIONS_STAGE: Stage = {
+  key: "candidate-questions",
+  goal:
+    "STOP INTERVIEWING THEM. Ask them NO further interview questions from here. React to their last answer in one short clause if you " +
+    "like, then this turn MUST end by handing them the floor in your own words — the sense of 'that's everything from me, what would " +
+    "you like to ask me?'. After that, ANSWER whatever they ask, specifically and honestly, from what you know about the job; if a " +
+    "question is a good one, say so. If they ask nothing, offer them something worth asking about rather than closing — a fresher " +
+    "often does not know it is allowed to ask.",
+};
+
 /** Technical round: background → their work → write code → defend the code →
- * fundamentals. Deliberately mirrors a real campus technical: nobody opens with
- * a DSA question, and nobody sets an exercise before knowing what you can do. */
+ * fundamentals → their questions. Deliberately mirrors a real campus technical:
+ * nobody opens with a DSA question, nobody sets an exercise before knowing what
+ * you can do, and nobody ends without handing the floor back. */
 const TECHNICAL_STAGES: Stage[] = [
   {
     key: "background",
@@ -44,9 +66,10 @@ const TECHNICAL_STAGES: Stage[] = [
     key: "fundamentals",
     goal: "Now the CS fundamentals and DSA — data structures, complexity, language internals — aimed at the areas their resume and their code suggest are worth probing.",
   },
+  CANDIDATE_QUESTIONS_STAGE,
   {
     key: "wrapup",
-    goal: "Close warmly. Invite any questions they have, then finish.",
+    goal: "Close warmly: one honest, specific thing they did well, what to work on, and what happens next. Then finish.",
   },
 ];
 
@@ -73,9 +96,10 @@ const HR_STAGES: Stage[] = [
     key: "practical",
     goal: "The practical ground a real HR round always covers: relocation, expected package (asked once, gently), availability.",
   },
+  CANDIDATE_QUESTIONS_STAGE,
   {
     key: "wrapup",
-    goal: "Close warmly. Invite any questions they have, then finish.",
+    goal: "Close warmly: one honest, specific thing they did well, what to work on, and what happens next. Then finish.",
   },
 ];
 
@@ -93,6 +117,17 @@ const CODE_REVIEW_ANSWERS = 2;
 /** Answers per stage in the HR round — roughly two exchanges each, which is
  * what a ten-minute round supports. */
 const HR_STAGE_SPAN = 2;
+
+/** When Haris stops asking and hands the floor over. HARD_STOP_ANSWERS is 16,
+ * so this leaves a real block for the candidate's questions rather than a
+ * token gesture as the clock runs out. */
+const HAND_OVER_AFTER_ANSWERS = 11;
+/** When it closes regardless. */
+const CLOSE_AFTER_ANSWERS = 15;
+
+/** The technical round has no answer-count trigger of its own after
+ * fundamentals, so it reaches the candidate's turn on the shared threshold
+ * above — same as HR. */
 
 export interface StageState {
   stage: Stage;
@@ -126,8 +161,12 @@ export function currentStage(
     idx = Math.min(at("practical"), Math.floor(answers / HR_STAGE_SPAN));
   }
 
-  // Always leave room to close properly rather than being cut off by the cap.
-  if (answers >= 14) idx = at("wrapup");
+  // Hand the floor over before closing, and leave room to do it properly rather
+  // than being cut off by the hard cap. Two thresholds, not one: a single
+  // "jump to wrapup" would skip the candidate's turn entirely, which is exactly
+  // how it got skipped when it was only a clause inside the wrap-up.
+  if (answers >= HAND_OVER_AFTER_ANSWERS) idx = Math.max(idx, at("candidate-questions"));
+  if (answers >= CLOSE_AFTER_ANSWERS) idx = at("wrapup");
   idx = Math.max(0, Math.min(stages.length - 1, idx));
   return { stage: stages[idx], index: idx, total: stages.length, next: stages[idx + 1] ?? null };
 }

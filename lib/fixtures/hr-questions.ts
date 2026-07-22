@@ -212,10 +212,23 @@ export const VERBAL_ACKS = [
 // Honest about what it is. This used to introduce itself as "Priya Sharma, HR
 // at Meridian Corp" — a fabricated human at a fabricated company. Haris is an
 // AI that is PLAYING an interviewer, and says so.
+// Shaped like a real interviewer's kickoff. The best-documented one in the wild
+// (jacobian.org/2018/nov/29/annotated-interview-kickoff-script) covers seven
+// things before the first question: who I am, thanks, what kind of interview
+// this is, that there are no right answers, roughly how many questions, how
+// long, and where your questions fit — plus a warning that I will dig in.
+// Guides add a consent check ("Sound good?"), which hands the candidate a turn
+// inside the first minute.
+//
+// The stated reason is anxiety, not manners: most people have had little
+// practice being interviewed, so normal things feel strange unless flagged.
+// That goes double for a fresher on their first campus round, which is exactly
+// who uses this.
 export const GREETING = (name: string) =>
-  `Hi ${name}, I'm Haris — an AI interviewer. For this round I'm playing the HR interviewer, ` +
-  `so treat it like the real thing. It's just a conversation, around ten minutes, and you can ask me anything as we go. ` +
-  `So, tell me a bit about yourself.`;
+  `Hi ${name}, I'm Haris — an AI interviewer, and for this round I'm playing the HR interviewer, so treat it like the real thing. ` +
+  `We've got about ten minutes. I'll ask about your background and your projects, then how you work with people, and I'll leave time at the end for anything you want to ask me — though honestly, jump in whenever, this is meant to go both ways. ` +
+  `There are no right answers, and I'll dig into what you say rather than just moving on. Sound alright? ` +
+  `Then let's start with you — tell me a bit about yourself and what you've been building.`;
 
 export const WRAPUP = (name: string) =>
   `That concludes our round, ${name}. Thank you — you'll see your feedback in just a moment.`;

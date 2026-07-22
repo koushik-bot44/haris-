@@ -54,9 +54,24 @@ describe("interview stages", () => {
     expect(stageAt("hr", 8)).toBe("practical");
   });
 
-  it("always leaves room to close instead of being cut off by the cap", () => {
-    expect(stageAt("hr", 14)).toBe("wrapup");
-    expect(stageAt("technical", 15)).toBe("wrapup");
+  // The candidate's turn has to survive the endgame. When "invite any
+  // questions" was one clause inside the wrap-up, a single jump-to-wrapup
+  // threshold skipped it entirely — which is how a whole half of the interview
+  // silently went missing.
+  it("hands the floor to the candidate before closing, in both rounds", () => {
+    for (const round of ["hr", "technical"] as const) {
+      expect(stageAt(round, 11)).toBe("candidate-questions");
+      expect(stageAt(round, 14)).toBe("candidate-questions");
+      expect(stageAt(round, 15)).toBe("wrapup");
+    }
+  });
+
+  it("puts the candidate's questions immediately before the close in both rounds", () => {
+    for (const round of ["hr", "technical"] as const) {
+      const keys = stagesFor(round).map((s) => s.key);
+      expect(keys.at(-2)).toBe("candidate-questions");
+      expect(keys.at(-1)).toBe("wrapup");
+    }
   });
 
   it("every stage carries a goal for the prompt, and the last one has no next", () => {
@@ -73,5 +88,36 @@ describe("interview stages", () => {
     expect(
       codingAlreadyAsked([{ speaker: "interviewer", text: "Now let's see some code. Use the editor, submit when ready." }]),
     ).toBe(true);
+  });
+});
+
+describe("the candidate's half of the interview", () => {
+  it("gives the candidate a stage of their own, not a clause in the wrap-up", () => {
+    for (const round of ["hr", "technical"] as const) {
+      const stage = stagesFor(round).find((s) => s.key === "candidate-questions");
+      expect(stage).toBeDefined();
+      // It must forbid further interview questions, or it is just more of the
+      // same round with a friendlier label.
+      expect(stage!.goal).toMatch(/STOP INTERVIEWING THEM/);
+      expect(stage!.goal.toLowerCase()).toContain("ask me");
+    }
+  });
+
+  it("reaches the hand-over from any point in either round", () => {
+    // Whatever the round was doing at answer 11 — probing a project, running
+    // DSA — it stops asking and gives the floor back.
+    for (const round of ["hr", "technical"] as const) {
+      for (let a = 11; a < 15; a++) expect(stageAt(round, a)).toBe("candidate-questions");
+    }
+  });
+
+  it("never closes without the candidate having had the floor", () => {
+    // The regression this guards: with a single jump-to-wrapup threshold the
+    // candidate's turn was skipped entirely.
+    for (const round of ["hr", "technical"] as const) {
+      const keys = stagesFor(round).map((s) => s.key);
+      expect(keys.indexOf("candidate-questions")).toBeLessThan(keys.indexOf("wrapup"));
+      expect(keys.indexOf("candidate-questions")).toBeGreaterThan(0);
+    }
   });
 });

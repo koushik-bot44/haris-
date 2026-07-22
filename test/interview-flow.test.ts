@@ -281,10 +281,12 @@ describe("claude-cli provider (scripted paths, no CLI spawned)", () => {
     };
     const prompt = buildPrompt(req);
     const head = prompt.slice(0, prompt.indexOf("Conversation so far"));
-    // ~3150 chars (~790 tokens), up from ~1600 before the conversation-engine
-    // redesign. The behavioural rules (answer them first, correct them, be
-    // curious) ARE the product — the old terse prompt is what made the
-    // interviewer talk past people — so the head had to grow.
+    // ~5080 chars (~1270 tokens). Grown twice on purpose: once for the
+    // behavioural rules (answer them first, correct them, be curious) and once
+    // for the two-way material (what Haris knows about the job, and the rule
+    // that it must react and volunteer rather than only extract). Both ARE the
+    // product — the old terse prompt is what made the interviewer talk past
+    // people and never give anything back.
     //
     // The ceiling is not about latency, it is about MONEY-SHAPED FAILURE. Groq's
     // free tier meters 12,000 tokens per MINUTE. Every token here is paid on
@@ -293,7 +295,7 @@ describe("claude-cli provider (scripted paths, no CLI spawned)", () => {
     // AI is scripted". At ~790 tokens of instructions plus a windowed
     // transcript, a full interview stays inside the budget. Sharpen a line
     // rather than appending one.
-    expect(head.length).toBeLessThanOrEqual(4200);
+    expect(head.length).toBeLessThanOrEqual(5600);
     expect(prompt).toContain("@@CTRL");
     expect(prompt).toContain("CANDIDATE RESUME PROFILE");
     expect(prompt).not.toContain("<<<RESUME");

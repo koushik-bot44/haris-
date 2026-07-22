@@ -12,7 +12,8 @@ import {
   type Progress,
 } from "@/lib/llm/parse";
 import { cliAllowed, runClaude } from "@/lib/llm/cli-runner";
-import { codingAlreadyAsked, currentStage } from "@/lib/llm/interview-stages";
+import { codingAlreadyAsked, currentStage, type Stage } from "@/lib/llm/interview-stages";
+import { companyBriefBlock } from "@/lib/fixtures/company-brief";
 
 // Development-only provider: the user's authenticated Claude Code CLI is the
 // brain — a genuinely adaptive interviewer with NO API key, on the fastest
@@ -161,6 +162,24 @@ export function buildPrompt(req: InterviewRequest, recall = ""): string {
   // The single most important line in the whole prompt: what they actually just
   // said. Quoted verbatim next to the decision checklist below the transcript.
   const lastCandidateLine = [...req.history].reverse().find((h) => h.speaker === "candidate")?.text?.slice(0, 400) ?? "";
+  // The stage goal also lives in INTERNAL STATE above, but that is upstream of a
+  // growing transcript and loses to it — the same attention decay that made the
+  // behavioural rules stop firing. Measured: at the hand-over threshold the
+  // model kept interviewing instead of giving the candidate the floor. So the
+  // objective is restated here too, in one line, at the point of generation.
+  const stageNow: Stage = currentStage(req.roundType, req.history, {
+    codingAsked: codingAlreadyAsked(req.history),
+    answers,
+  }).stage;
+  // The candidate-questions stage has two distinct moments and one static goal
+  // string cannot serve both. Handed the floor over already and asked a real
+  // question, the model kept re-offering the floor — "that's everything from me,
+  // what would you like to ask?" in reply to someone who had just asked. So the
+  // objective switches on whether they are currently asking.
+  const objective =
+    stageNow.key === "candidate-questions" && lastCandidateLine.includes("?")
+      ? "They have the floor and they have just asked you something. ANSWER IT — specifically, from what you know about the job — and nothing else. Do not hand them the floor again, they already have it. Do not ask them an interview question. When they run out, close warmly."
+      : stageNow.goal;
   return [
     personaBlock(req),
 
@@ -170,6 +189,11 @@ export function buildPrompt(req: InterviewRequest, recall = ""): string {
     // sharpening a line, not by appending a new one.
     `You are a real person in a real conversation, not a form read aloud. Warm, curious, direct.`,
     `DECIDE EACH TURN from what they just said: answer, react, reassure, correct, dig in, or move on. A turn need NOT contain a question — only ask when asking is right.`,
+    // Research on why AI mocks feel fake converges on this: the bot extracts
+    // and never gives. Real interviewers react, agree, push back, and tell you
+    // about the job unprompted — they are recruiting you as much as judging you.
+    `REACT BEFORE YOU ASK. Say what you actually thought of their answer — agree, be impressed, push back, or admit it is a tradeoff you argue about too. One clause is enough, but never jump straight to the next question as if they had not spoken.`,
+    `You are also being interviewed. Volunteer something real about the job when it fits, and early on tell them they can ask you anything at any point, not only at the end.`,
     `If they asked you ANYTHING (your name, what this is, whether they were right) answer it first and plainly. Never talk past a direct question; answering can be the whole turn.`,
     `Nervous or apologising: reassure them, no question that turn. Joking or absurd ("I'm 900 years old"): be funny back in one line, then ask for the real answer — never answer a joke with a policy statement. Bare "hi": greet them like a person, don't read hesitation into it, don't launch a topic. Off-topic: follow briefly, then steer back.`,
     `Be curious about specifics. If they name a project, tool or decision, ask about THAT — the best question is usually the obvious follow-up to their last sentence.`,
@@ -183,6 +207,7 @@ export function buildPrompt(req: InterviewRequest, recall = ""): string {
     ...(req.roundType === "hr" && hasProfile ? [hrCanonBlock(req.profile!)] : []),
     ...(req.roundType === "technical" && req.codeLanguage ? [`Their chosen coding language is ${req.codeLanguage}.`] : []),
     resumeBlock,
+    companyBriefBlock(req.role),
     recall,
     ``,
     `Conversation so far (this is your memory — use it):`,
@@ -203,6 +228,12 @@ export function buildPrompt(req: InterviewRequest, recall = ""): string {
     // "They didn't ask me anything, and I don't see anything factually wrong or
     // a joke in there... I've got to correct that Java thing though" — the
     // model's private reasoning, spoken to the candidate by the TTS.
+    // The objective sits ABOVE the respond rule on purpose. With it last, the
+    // model followed the stage over the person: handed to the candidate-questions
+    // stage, it answered "what would you like to ask me?" to a candidate who had
+    // just asked a question, instead of answering the question. Recency decides,
+    // so the person gets the final word.
+    `Your objective right now: ${objective}`,
     `Respond to THAT line. If it asks you something, answer it in your own words — never echo their question back. If any of it is factually wrong, say what is actually true. If it is a joke or an absurd claim, be amused for one line, then ask for the real answer. If they are nervous, reassure them. If they ask for advice, give them something specific and genuinely useful, never a platitude.`,
     // "(no answer)" is what the room records when a listening window closes in
     // silence. Without this rule the model read it as a completed answer and

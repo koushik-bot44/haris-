@@ -17,9 +17,15 @@ export const TECH_PERSONA = {
   initials: "H",
 };
 
+// Same kickoff shape as the HR round — see the note on GREETING. The technical
+// version additionally SELLS the team and the work, which every guide to
+// running a technical interview says the interviewer should do up front: the
+// candidate is deciding about you too.
 export const TECH_GREETING = (name: string) =>
-  `Hi ${name}, I'm Haris — an AI interviewer. For this round I'm playing the technical interviewer, and there's some hands-on coding in it. ` +
-  `Don't worry about perfect answers; I care how you think, and you can ask me things too. Let's start.`;
+  `Hi ${name}, I'm Haris — an AI interviewer, and for this round I'm playing the technical interviewer. ` +
+  `Here's the shape: we'll talk about what you've built, go deep on one project, then there's a hands-on coding bit, and after that I'll ask about your solution and some fundamentals. I'll leave time at the end for your questions, but ask me anything whenever — this goes both ways. ` +
+  `I care how you think far more than whether you get it perfect, and I'll say so if I disagree with you. ` +
+  `Ready? Tell me what you've been building lately.`;
 
 export const TECH_WRAPUP = (name: string) =>
   `Alright ${name}, that's the technical round done. Good effort — your detailed feedback is coming up now.`;
