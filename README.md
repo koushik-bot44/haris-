@@ -43,21 +43,28 @@ is the only place that changes.
 Speech input auto-selects: Chrome's recognizer when reachable, on-device
 Whisper (~40MB, any browser, offline) otherwise.
 
-## What works today (M1 weekend 1)
+## What works today (v1.0.0.0 — the complete product)
 
-- Full spoken HR round: mic check → pre-roll → 5 questions with adaptive
-  follow-ups → wrap-up, all questions spoken aloud and captioned.
-- STT hardening: Chrome's recognizer auto-stops and errors constantly; the
-  wrapper (pure reducer, fully unit-tested) restarts it and preserves the
-  transcript. Mic denial or repeated network errors degrade to text mode —
-  the interview never dies.
-- Delivery metrics: pace, lexical fillers, long pauses — computed from the
-  recorded STT event trace with restart gaps excluded.
-- Visible latency number per turn (student's last word → interviewer's first
-  syllable), plus the verbal-acknowledgment mask.
-- Guest sessions saved to localStorage in the same schema MongoDB gets later.
+- Every placement round: deep-dive HR and technical interviews (voice + text,
+  Monaco coding pane), and the Group Discussion room — three AI candidates
+  with distinct voices you fight for airtime, moderated and scored.
+- A real interviewer: opens from your resume, probes each topic until you tap
+  out, calls out rehearsed answers, nudges you when you stall, and can be
+  interrupted mid-sentence. Replies are speculatively pre-generated while you
+  speak, so they land near-instantly on the happy path.
+- Studio voice: Chatterbox (Elena by default; pick Gianna/Adrian/Olivia on the
+  setup screen) streamed sentence-by-sentence, falling back to on-device
+  Kokoro, then the system voice — the room never goes silent.
+- Evidence-based scoring: per-question rubric with quotes verifiably present
+  in your transcript, delivery metrics, and a full report + replay timeline
+  at /report/[id]; dashboard, history, and progress read the same data.
+- Career guidance (/guidance): learning path, certifications, skill gaps, and
+  role + company recommendations from your resume and scored rounds.
+- PDF resume upload with in-browser extraction (the file never leaves your
+  device) + ATS readiness score; guests never upload anything — sign-in and
+  MongoDB persistence are optional and env-gated.
 
-## Not yet (by design — see the plan)
+## Later (see TODOS.md)
 
 Rubric scoring, report page hierarchy, rate limiting + deploy (weekend 2) ·
 GD spike (August, weekends 3–4) · technical round + resume context (M2) ·
