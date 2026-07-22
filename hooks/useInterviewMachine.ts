@@ -766,9 +766,6 @@ export function useInterviewMachine(
   const streamTurn = useCallback(async (): Promise<{ turn: InterviewerTurn; live: LiveSpeech | null }> => {
     const abort = new AbortController();
     streamAbortRef.current = abort;
-    let firstHandle: SpeakHandle | null = null;
-    let spoken = "";
-    let failed = false;
     try {
       const res = await fetch("/api/interview", {
         method: "POST",
@@ -804,30 +801,14 @@ export function useInterviewMachine(
             turn = ev.turn;
             continue;
           }
-          // Display-first: captions are a11y and always rendered, so the
-          // accumulated text shows immediately, still under 'thinking'.
+          // Display-first: the reply TYPES OUT here while she still "thinks"
+          // (captions are always rendered — a11y + text-before-voice). The
+          // voice is deliberately NOT split across sentences: speaking the
+          // first sentence early then the rest separately produced audible
+          // gaps whenever the streamed and final text didn't line up exactly,
+          // which read as her being cut off mid-question. deliverTurn now
+          // speaks the COMPLETE question once, as a single clean utterance.
           setCaption(stripSpeechTags(ev.text));
-          if (!textModeRef.current && !firstHandle) {
-            const sentence = firstSentence(ev.text);
-            if (sentence) {
-              // The ack shares the audio path — let it finish, then re-guard.
-              if (ackRef.current) {
-                await ackRef.current.done;
-                ackRef.current = null;
-              }
-              if (endedRef.current) throw new Error("ended");
-              // Single-voice invariant: a lingering previous-turn tail dies
-              // before the pipelined first sentence starts.
-              speakRef.current?.cancel();
-              spoken = sentence;
-              const h = speak(sentence, { voice: voiceForRound(roundType) });
-              firstHandle = h;
-              speakRef.current = h; // cleanup can cancel it before deliverTurn takes over
-              void h.firstSyllableAt.then(() => {
-                if (!failed && !endedRef.current) setPhase("speaking");
-              });
-            }
-          }
         }
         if (turn) {
           void reader.cancel().catch(() => {});
@@ -836,10 +817,9 @@ export function useInterviewMachine(
         if (done) break;
       }
       if (!turn) throw new Error("stream_no_turn");
-      return { turn, live: firstHandle ? { handle: firstHandle, spoken } : null };
+      // Voice is never split — deliverTurn speaks the whole question once.
+      return { turn, live: null };
     } catch (err) {
-      failed = true;
-      firstHandle?.cancel();
       throw err;
     } finally {
       if (streamAbortRef.current === abort) streamAbortRef.current = null;
