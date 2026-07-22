@@ -615,6 +615,10 @@ export function useInterviewMachine(
       return;
     }
 
+    // SINGLE-VOICE INVARIANT: whatever is still speaking dies before the new
+    // utterance starts — two interviewer voices at once is never acceptable,
+    // no matter which orchestration path slipped.
+    if (speakRef.current && speakRef.current !== live?.handle) speakRef.current.cancel();
     // One handle, three sources: a streamed turn chains the remainder after
     // its already-speaking first sentence (cancel covers both utterances);
     // prepared (speculative) audio schedules instantly; otherwise live speak().
@@ -786,6 +790,9 @@ export function useInterviewMachine(
                 ackRef.current = null;
               }
               if (endedRef.current) throw new Error("ended");
+              // Single-voice invariant: a lingering previous-turn tail dies
+              // before the pipelined first sentence starts.
+              speakRef.current?.cancel();
               spoken = sentence;
               const h = speak(sentence, { voice: voiceForRound(roundType) });
               firstHandle = h;
