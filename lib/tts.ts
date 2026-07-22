@@ -23,6 +23,16 @@ export function getVoiceEngine(): VoiceEngine {
   }
 }
 
+/** True when the user has ever explicitly picked a voice (any value stored). */
+export function hasStoredVoiceChoice(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    return window.localStorage.getItem(ENGINE_KEY) !== null;
+  } catch {
+    return true;
+  }
+}
+
 export function setVoiceEngine(engine: VoiceEngine): void {
   try {
     window.localStorage.setItem(ENGINE_KEY, engine);

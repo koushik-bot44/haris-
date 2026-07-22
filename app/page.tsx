@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getVoiceEngine, kokoroStatus, setVoiceEngine, type VoiceEngine } from "@/lib/tts";
+import { getVoiceEngine, hasStoredVoiceChoice, kokoroStatus, setVoiceEngine, type VoiceEngine } from "@/lib/tts";
 
 // Landing = the setup screen (binding UX spec). No marketing hero: the round
 // picker is the first thing on the page, and one real sample scorecard row sits
@@ -55,6 +55,13 @@ export default function SetupPage() {
         .then((d) => {
           setElevenAvailable(Boolean(d.elevenlabs ?? d.enabled));
           setChatterboxAvailable(Boolean(d.chatterbox));
+          // First visit + the local studio server is running → it IS the
+          // default (user verdict: the best voice available). An explicit
+          // choice is never overridden.
+          if (d.chatterbox && !hasStoredVoiceChoice()) {
+            setVoiceEngine("chatterbox");
+            setEngine("chatterbox");
+          }
         })
         .catch(() => {});
     probe();
@@ -214,7 +221,7 @@ export default function SetupPage() {
               onChange={() => pickEngine("chatterbox")}
             />
             <span>
-              Studio voice (Chatterbox, local) —{" "}
+              Studio voice (Chatterbox, local) — <strong>recommended</strong>{" "}
               <span className="muted small">
                 {chatterboxAvailable
                   ? "server running ✓ · clone any voice at localhost:8004"

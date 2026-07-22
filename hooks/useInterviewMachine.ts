@@ -19,7 +19,7 @@ import { speak, type SpeakHandle } from "@/lib/tts";
 import { decideBargeIn, echoOverlap, ECHO_OVERLAP_THRESHOLD } from "@/lib/barge-in";
 import { aggregateMetrics, computeDeliveryMetrics, METRICS_VERSION } from "@/lib/metrics";
 import { newSessionId, saveSession } from "@/lib/session-store";
-import { VERBAL_ACKS } from "@/lib/fixtures/hr-questions";
+import { playAck, prepareAcks, resetAcks } from "@/lib/ack";
 import { CODING_QUESTIONS, TECH_PERSONA, type CodingQuestion } from "@/lib/fixtures/technical-questions";
 import { setVizMode, startMicViz, stopMicViz } from "@/lib/audio-viz";
 
@@ -119,7 +119,6 @@ export function useInterviewMachine(
   const ackRef = useRef<SpeakHandle | null>(null);
   const answerStartTRef = useRef(0);
   const answerEndTRef = useRef<number | null>(null);
-  const ackCounterRef = useRef(0);
   const endedRef = useRef(false);
   const startedRef = useRef(false);
   const textModeRef = useRef(false);
@@ -212,8 +211,11 @@ export function useInterviewMachine(
       micCheckSttRef.current?.stop();
     } catch {}
     micCheckSttRef.current = null;
-    // Permission is granted by now — open the orb's true-amplitude mic tap.
+    // Permission is granted by now — open the orb's true-amplitude mic tap,
+    // and pre-generate engine-native acks so they play instantly later.
     if (!textModeRef.current) void startMicViz();
+    resetAcks();
+    void prepareAcks();
     setPhase("preroll");
   }, []);
 
@@ -383,9 +385,9 @@ export function useInterviewMachine(
   );
 
   const speakAck = useCallback(() => {
-    const ack = VERBAL_ACKS[ackCounterRef.current % VERBAL_ACKS.length];
-    ackCounterRef.current += 1;
-    ackRef.current = speak(ack);
+    // Engine-native cached ack, or nothing — a robotic ack is worse than
+    // silence (the orb's thinking state carries the gap).
+    ackRef.current = playAck();
   }, []);
 
   const callInterviewer = useCallback(async () => {
