@@ -1,5 +1,6 @@
 import type { RoundType, RubricScores, Session, Turn } from "@/lib/types";
 import { avgScore, type Criterion } from "@/lib/rubric";
+import { roleLabel } from "@/lib/interview/roles";
 
 // Pure selectors behind the three reporting views (one data surface, three
 // jobs — binding UX spec). All read the same Session[] the guest store holds.
@@ -164,4 +165,37 @@ export function gdAirtimeRows(session: Session): AirtimeRow[] {
     }))
     .sort((a, b) => b.pct - a.pct);
   return rows.concat(personas);
+}
+
+export function sessionRoleLabel(session: Session): string {
+  return roleLabel(session.role);
+}
+
+function hasReadiness(s: Session): boolean {
+  return Array.isArray(s.readiness?.competencies);
+}
+
+export interface CompetencyTrendRow {
+  id: string;
+  label: string;
+  points: { t: number; score: number | null }[];
+  /** Last scored minus first scored, when there are at least two. */
+  delta: number | null;
+}
+
+/** Competency scores across the rounds that carry a readiness report, oldest
+ * first — the rows of the progress page's trend table. */
+export function competencyTrends(sessions: Session[], maxSessions = 6): { columns: { id: string; t: number; verdict: string }[]; rows: CompetencyTrendRow[] } {
+  const rounds = sessions.filter(hasReadiness).sort((a, b) => a.startedAt - b.startedAt).slice(-maxSessions);
+  const labels = new Map<string, string>();
+  for (const s of rounds) for (const c of s.readiness!.competencies) labels.set(c.id, c.label);
+  const rows = [...labels.entries()]
+    .map(([id, label]) => {
+      const points = rounds.map((s) => ({ t: s.startedAt, score: s.readiness!.competencies.find((c) => c.id === id)?.score ?? null }));
+      const scored = points.filter((p): p is { t: number; score: number } => p.score !== null);
+      const delta = scored.length >= 2 ? Math.round((scored[scored.length - 1].score - scored[0].score) * 10) / 10 : null;
+      return { id, label, points, delta };
+    })
+    .filter((r) => r.points.some((p) => p.score !== null));
+  return { columns: rounds.map((s) => ({ id: s._id, t: s.startedAt, verdict: s.readiness!.verdict })), rows };
 }

@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from "react";
 import { loadSessions } from "@/lib/session-store";
-import { CRITERIA, CRITERION_LABEL, criterionTrend, roundLabel, sessionAvg, scoredSessions } from "@/lib/report-utils";
+import { competencyTrends, CRITERIA, CRITERION_LABEL, criterionTrend, roundLabel, sessionAvg, scoredSessions } from "@/lib/report-utils";
 import { EmptyState } from "@/components/ReportNav";
 import { ReportStyles } from "@/components/report/ReportStyles";
 import type { Session } from "@/lib/types";
@@ -73,6 +73,46 @@ function TrendChart({ trend }: { trend: ReturnType<typeof criterionTrend> }) {
   );
 }
 
+/** Competency scores (out of 10) across adaptive rounds, oldest first. */
+function CompetencyTrends({ sessions }: { sessions: Session[] }) {
+  const { columns, rows } = competencyTrends(sessions);
+  if (!columns.length) return null;
+  return (
+    <section className="r-section">
+      <h2>Competency trends</h2>
+      <p className="r-lead tight">Each adaptive round's readiness scores, out of 10, oldest first.</p>
+      <div style={{ overflowX: "auto" }}>
+        <table className="plain">
+          <thead>
+            <tr>
+              <th>Competency</th>
+              {columns.map((c) => (
+                <th key={c.id} className="r-right mono-num" title={c.verdict}>
+                  {new Date(c.t).toLocaleDateString([], { month: "short", day: "numeric" })}
+                </th>
+              ))}
+              <th className="r-right">Change</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td>{r.label}</td>
+                {r.points.map((p, i) => (
+                  <td key={i} className="r-right mono-num">
+                    {p.score === null ? "—" : p.score.toFixed(1)}
+                  </td>
+                ))}
+                <td className="r-right mono-num">{r.delta === null ? "—" : `${r.delta > 0 ? "+" : ""}${r.delta.toFixed(1)}`}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export default function ProgressPage() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -112,6 +152,7 @@ export default function ProgressPage() {
       ) : (
         <TrendChart trend={trend} />
       )}
+      <CompetencyTrends sessions={sessions} />
     </main>
   );
 }

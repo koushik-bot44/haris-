@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { loadSessions } from "@/lib/session-store";
-import { questionDenominator, roundLabel, scoreDots, sessionAvg } from "@/lib/report-utils";
+import { questionDenominator, roundLabel, scoreDots, sessionAvg, sessionRoleLabel } from "@/lib/report-utils";
 import { EmptyState } from "@/components/ReportNav";
 import { ReportStyles } from "@/components/report/ReportStyles";
 // Uniform ink dots — strength carries the score; color stays reserved for
@@ -38,6 +38,7 @@ export default function HistoryPage() {
             <tr>
               <th>When</th>
               <th>Round</th>
+              <th>Verdict</th>
               <th>Questions</th>
               <th className="r-right">Avg</th>
             </tr>
@@ -69,10 +70,25 @@ export default function HistoryPage() {
                   </td>
                   <td>
                     {roundLabel(s.roundType)}
+                    {s.roundType !== "gd" && <span className="muted small"> · {sessionRoleLabel(s)}</span>}
                     {s.codingUsed ? " · code" : ""}
                     {dots.length === 0 && <span className="muted small"> · unscored</span>}
                     {dots.length > 0 && dots.length < denom && (
                       <span className="muted small"> · incomplete ({dots.length}/{denom})</span>
+                    )}
+                  </td>
+                  <td>
+                    {s.readiness?.verdict ? (
+                      <>
+                        <span className="chip">{s.readiness.verdict}</span>
+                        {s.readiness.weakest?.length ? (
+                          <div className="muted small">
+                            work on: {s.readiness.weakest.map((id) => s.readiness!.competencies.find((c) => c.id === id)?.label ?? id).join(", ")}
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <span className="muted small">—</span>
                     )}
                   </td>
                   <td>
