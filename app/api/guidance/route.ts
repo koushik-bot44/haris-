@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { ROLE_PRESETS } from "@/lib/interview/roles";
 import { RESUME_MAX_CHARS, sanitizeResume } from "@/lib/interview-schema";
 import { buildGuidance } from "@/lib/llm/guidance";
 
@@ -7,7 +8,7 @@ import { buildGuidance } from "@/lib/llm/guidance";
 // (sessions live in the browser's localStorage, never on the server).
 
 const bodySchema = z.object({
-  role: z.enum(["general", "java-sde-fresher", "frontend-fresher"]),
+  role: z.enum(ROLE_PRESETS),
   resumeText: z.string().max(RESUME_MAX_CHARS).transform(sanitizeResume).optional(),
   performance: z.object({
     avgScore: z.number().finite().min(0).max(5).nullable(),

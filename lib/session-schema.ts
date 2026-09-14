@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ROLE_PRESETS } from "@/lib/interview/roles";
 import type { Session } from "@/lib/types";
 
 // Server-side validation of the full pinned Session shape (lib/types.ts).
@@ -88,7 +89,7 @@ export const sessionSchema = z
   .object({
     _id: z.string().min(8).max(64),
     userId: z.string().max(200).nullable(),
-    role: z.enum(["general", "java-sde-fresher", "frontend-fresher"]),
+    role: z.enum(ROLE_PRESETS),
     roundType: z.enum(["hr", "technical", "gd"]),
     codingUsed: z.boolean(),
     startedAt: epochMs,

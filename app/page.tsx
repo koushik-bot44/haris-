@@ -7,6 +7,7 @@ import { buildResumeProfile } from "@/lib/resume-profile";
 import { resolveVoiceEngine } from "@/lib/tts";
 import { setPreferredVoice } from "@/lib/voices";
 import type { CodeLanguage } from "@/lib/types";
+import { PICKER_ROLES, ROLE_FAMILIES, supportsTechnicalRound, type RoleFamily } from "@/lib/interview/roles";
 import { Hero } from "@/components/Hero";
 
 // Landing = the setup screen (binding UX spec). No marketing hero: the round
@@ -60,7 +61,7 @@ const CODE_LANGS: { id: CodeLanguage; label: string }[] = [
 export default function SetupPage() {
   const router = useRouter();
   const [name, setName] = useState("");
-  const [role, setRole] = useState("general");
+  const [role, setRole] = useState<RoleFamily>("sde");
   const [round, setRound] = useState<Round>("hr");
   const [codeLang, setCodeLang] = useState<CodeLanguage>("java");
   // ON by default, matching the interview room's own default and the preroll
@@ -220,7 +221,7 @@ export default function SetupPage() {
   };
 
   const roundRadio = rovingRadio(
-    ROUNDS.filter((r) => !(r.id === "gd" && !GD_ON)).map((r) => r.id),
+    ROUNDS.filter((r) => !(r.id === "gd" && !GD_ON) && !(r.id === "technical" && !supportsTechnicalRound(role))).map((r) => r.id),
     round,
     setRound,
   );
@@ -252,7 +253,7 @@ export default function SetupPage() {
 
           <div role="radiogroup" aria-label="Interview round" className="round-grid">
             {ROUNDS.map((r) => {
-              const disabled = r.id === "gd" && !GD_ON;
+              const disabled = (r.id === "gd" && !GD_ON) || (r.id === "technical" && !supportsTechnicalRound(role));
               return (
                 <button
                   key={r.id}
@@ -267,7 +268,7 @@ export default function SetupPage() {
                     {r.title}
                     {r.id === "gd" && !disabled && <span className="chip on"><span className="dot" />new</span>}
                   </span>
-                  <span className="choice-desc">{disabled ? "In the works." : r.desc}</span>
+                  <span className="choice-desc">{disabled ? (r.id === "technical" ? "Not part of an HR / behavioural role." : "In the works.") : r.desc}</span>
                 </button>
               );
             })}
@@ -288,11 +289,22 @@ export default function SetupPage() {
               </div>
               <div className="field">
                 <label htmlFor="role">Target role</label>
-                <select id="role" value={role} onChange={(e) => setRole(e.target.value)}>
-                  <option value="general">General fresher</option>
-                  <option value="java-sde-fresher">Java SDE fresher</option>
-                  <option value="frontend-fresher">Frontend fresher</option>
+                <select
+                  id="role"
+                  value={role}
+                  onChange={(e) => {
+                    const next = e.target.value as RoleFamily;
+                    setRole(next);
+                    if (round === "technical" && !supportsTechnicalRound(next)) setRound("hr");
+                  }}
+                >
+                  {PICKER_ROLES.map((r) => (
+                    <option key={r} value={r}>
+                      {ROLE_FAMILIES[r].label}
+                    </option>
+                  ))}
                 </select>
+                <span className="hint">Decides which skills the interview must cover and how it is scored.</span>
               </div>
             </div>
 

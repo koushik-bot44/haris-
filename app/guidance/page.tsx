@@ -7,13 +7,14 @@ import { CRITERION_LABEL, latestWeakest, scoredSessions, sessionAvg, type FixFir
 import { ReportStyles } from "@/components/report/ReportStyles";
 import { loadSessions } from "@/lib/session-store";
 import type { RolePreset } from "@/lib/types";
+import { ROLE_PRESETS } from "@/lib/interview/roles";
 
 // Guidance — department modules 9+10 on one page: what to close, learn and
 // aim for. The client composes its own inputs (localStorage sessions +
 // sessionStorage resume); the server never reads sessions.
 
 const CACHE_KEY = "pds_guidance_v1";
-const ROLES: readonly RolePreset[] = ["general", "java-sde-fresher", "frontend-fresher"];
+const ROLES: readonly RolePreset[] = ROLE_PRESETS;
 
 interface GuidanceResult {
   guidance: Guidance;

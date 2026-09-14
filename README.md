@@ -108,6 +108,9 @@ analysis, career guidance and the GD debate run on a separate background model
 
 - **HR & Technical interviews** (voice + text) — adaptive, resume-anchored,
   deep-dive questioning; the technical round includes a live coding editor.
+- **11 role families** — SDE, Full Stack, Frontend, Backend, Java, Python, Data
+  Analyst, DevOps, QA, AI/ML and HR/Behavioural; each changes the competencies,
+  probes, difficulty, rubric anchors and report, not just the question list.
 - **Adaptive interview engine** (`lib/interview/`) — the app owns the plan,
   evidence, competency coverage, claims and scoring; the model writes the words
   and proposes one move (follow up, clarify, challenge, probe a resume claim,

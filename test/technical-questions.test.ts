@@ -6,14 +6,14 @@ import {
   codingQuestionFor,
   codingSeedFrom,
 } from "@/lib/fixtures/technical-questions";
-import type { CodeLanguage, RolePreset } from "@/lib/types";
+import type { CodeLanguage } from "@/lib/types";
 
-const ROLES: RolePreset[] = ["general", "java-sde-fresher", "frontend-fresher"];
+const ROLES = ["general", "java-sde-fresher", "frontend-fresher"] as const;
 const LANGS: CodeLanguage[] = ["java", "python", "cpp", "javascript", "c"];
 
 // The function each role's exercise is built around — every starter must carry
 // it so the candidate types into a real signature, not an empty buffer.
-const FN_NAME: Record<RolePreset, RegExp> = {
+const FN_NAME: Record<(typeof ROLES)[number], RegExp> = {
   "java-sde-fresher": /first_?non_?repeating/i,
   "frontend-fresher": /debounce/i,
   general: /is_?anagram/i,
@@ -54,6 +54,13 @@ describe("codingQuestionFor", () => {
     // The scripted flow speaks .text — the defaults keep their language names.
     expect(CODING_QUESTIONS["java-sde-fresher"].text).toContain("Java");
     expect(CODING_QUESTIONS["frontend-fresher"].text).toContain("debounce");
+  });
+
+  it("gives every role family an exercise, in the family's own default language", () => {
+    expect(codingQuestionFor("python").language).toBe("python");
+    expect(codingQuestionFor("data-analyst").language).toBe("python");
+    expect(codingQuestionFor("fullstack").id).toBe(codingQuestionFor("frontend-fresher", "javascript").id);
+    expect(codingQuestionFor("backend", "java", "seed-a").id).toBe(codingQuestionFor("java-sde-fresher", "java", "seed-a").id);
   });
 
   it("uses Monaco language ids only", () => {

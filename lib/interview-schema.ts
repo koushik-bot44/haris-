@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ROLE_PRESETS } from "@/lib/interview/roles";
 
 // Request validation for /api/interview — proxy hardening per the plan: strict
 // shape, enums, turn and length caps. Lives outside the route file because
@@ -26,7 +27,7 @@ const resumeProfileSchema = z.object({
 });
 
 export const interviewRequestSchema = z.object({
-  role: z.enum(["general", "java-sde-fresher", "frontend-fresher"]),
+  role: z.enum(ROLE_PRESETS),
   roundType: z.enum(["hr", "technical"]),
   candidateName: z.string().trim().min(1).max(60),
   resume: z.string().max(RESUME_MAX_CHARS).transform(sanitizeResume).optional(),

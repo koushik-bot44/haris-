@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { llmSource, llmText, llmTextAvailable, type LlmSource } from "@/lib/llm/complete";
 import type { RolePreset } from "@/lib/types";
+import { legacyRoleOf } from "@/lib/interview/roles";
 
 export { guidanceCacheKey } from "@/lib/guidance-key";
 
@@ -103,7 +104,7 @@ const CRITERION_GAP: Record<string, string> = {
 
 const LOW_AVG_GAP = "Interview reps — your mock average is under 3/5";
 
-const ROLE_GUIDANCE: Record<RolePreset, Guidance> = {
+const ROLE_GUIDANCE: Partial<Record<RolePreset, Guidance>> & Record<"general", Guidance> = {
   general: {
     learningPath: [
       {
@@ -273,7 +274,7 @@ const ROLE_GUIDANCE: Record<RolePreset, Guidance> = {
 
 /** Deterministic curated fallback — labeled by the route's `source` field. */
 export function heuristicGuidance(role: RolePreset, performance: GuidancePerformance): Guidance {
-  const base = ROLE_GUIDANCE[role] ?? ROLE_GUIDANCE.general;
+  const base = ROLE_GUIDANCE[role] ?? ROLE_GUIDANCE[legacyRoleOf(role)] ?? ROLE_GUIDANCE.general;
   const extra: string[] = [];
   const criterionGap = performance.weakestCriterion ? CRITERION_GAP[performance.weakestCriterion] : undefined;
   if (criterionGap) extra.push(criterionGap);

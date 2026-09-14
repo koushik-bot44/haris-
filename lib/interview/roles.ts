@@ -578,3 +578,15 @@ export function competencyDef(id: string): CompetencyDef | undefined {
 export function competencyLabel(id: string): string {
   return COMPETENCIES[id]?.label ?? id;
 }
+
+export type LegacyRole = "general" | "java-sde-fresher" | "frontend-fresher";
+
+/** The original role whose question banks, coding pool and guidance a family
+ * shares until it has its own. */
+export function legacyRoleOf(role: RolePreset | string): LegacyRole {
+  if (role === "general" || role === "java-sde-fresher" || role === "frontend-fresher") return role;
+  const f = familyOf(role);
+  if (f === "java" || f === "backend" || f === "qa") return "java-sde-fresher";
+  if (f === "frontend" || f === "fullstack") return "frontend-fresher";
+  return "general";
+}

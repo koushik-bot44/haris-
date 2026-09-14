@@ -7,6 +7,7 @@
 
 import type { HrQuestion } from "@/lib/fixtures/hr-questions";
 import type { CodeLanguage, RolePreset } from "@/lib/types";
+import { familyOf, legacyRoleOf, ROLE_FAMILIES, type LegacyRole } from "@/lib/interview/roles";
 
 // One identity across every round: Haris, an AI, openly playing the role the
 // round calls for. It used to claim to be "Arjun Rao, tech lead at Meridian
@@ -244,7 +245,7 @@ const BALANCED_BRACKETS: Record<CodeLanguage, CodingQuestion> = {
 /** Every role's exercise in every language — same problem per role (same id),
  * five idiomatic starters. Kept as the role's DEFAULT; the pool below is what
  * a live interview actually draws from. */
-export const CODING_QUESTIONS_BY_LANG: Record<RolePreset, Record<CodeLanguage, CodingQuestion>> = {
+export const CODING_QUESTIONS_BY_LANG: Record<LegacyRole, Record<CodeLanguage, CodingQuestion>> = {
   "java-sde-fresher": FIRST_NON_REPEATING,
   "frontend-fresher": DEBOUNCE,
   general: ANAGRAM,
@@ -253,7 +254,7 @@ export const CODING_QUESTIONS_BY_LANG: Record<RolePreset, Record<CodeLanguage, C
 /** The problems a role can draw. Before this there was exactly ONE exercise per
  * role, so every candidate on `general` got the anagram question in every
  * session, forever — the single most obviously canned moment in the product. */
-export const CODING_POOL: Record<RolePreset, Record<CodeLanguage, CodingQuestion>[]> = {
+export const CODING_POOL: Record<LegacyRole, Record<CodeLanguage, CodingQuestion>[]> = {
   "java-sde-fresher": [FIRST_NON_REPEATING, PAIR_SUM, BALANCED_BRACKETS],
   "frontend-fresher": [DEBOUNCE, PAIR_SUM, ANAGRAM],
   general: [ANAGRAM, PAIR_SUM, BALANCED_BRACKETS],
@@ -261,7 +262,7 @@ export const CODING_POOL: Record<RolePreset, Record<CodeLanguage, CodingQuestion
 
 // Compatibility shape: the hook and the scripted flow index by role only —
 // each role's default is its pre-multi-language variant (java / javascript).
-export const CODING_QUESTIONS: Record<RolePreset, CodingQuestion> = {
+export const CODING_QUESTIONS: Record<LegacyRole, CodingQuestion> = {
   "java-sde-fresher": FIRST_NON_REPEATING.java,
   "frontend-fresher": DEBOUNCE.javascript,
   general: ANAGRAM.javascript,
@@ -281,16 +282,18 @@ export function codingQuestionFor(
   lang?: CodeLanguage,
   seed?: string,
 ): CodingQuestion {
-  const pool = CODING_POOL[role] ?? CODING_POOL.general;
-  const table = seed
-    ? pool[hashIndex(seed, pool.length)]
-    : (CODING_QUESTIONS_BY_LANG[role] ?? CODING_QUESTIONS_BY_LANG.general);
-  return table[lang ?? DEFAULT_LANG[role] ?? "javascript"] ?? CODING_QUESTIONS.general;
+  // Role families without exercises of their own share the nearest original
+  // pool, but open the editor in the family's own language.
+  const shared = legacyRoleOf(role);
+  const pool = CODING_POOL[shared];
+  const table = seed ? pool[hashIndex(seed, pool.length)] : CODING_QUESTIONS_BY_LANG[shared];
+  const defaultLang = role === shared ? DEFAULT_LANG[shared] : ROLE_FAMILIES[familyOf(role)].defaultLanguage;
+  return table[lang ?? defaultLang] ?? CODING_QUESTIONS[shared];
 }
 
 /** Language used when the candidate never picked one. Per role, matching the
  * pre-pool defaults — a Java SDE round must not open in JavaScript. */
-const DEFAULT_LANG: Record<RolePreset, CodeLanguage> = {
+const DEFAULT_LANG: Record<LegacyRole, CodeLanguage> = {
   "java-sde-fresher": "java",
   "frontend-fresher": "javascript",
   general: "javascript",

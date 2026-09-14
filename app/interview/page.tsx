@@ -16,6 +16,7 @@ import { micHelp } from "@/lib/mic-help";
 import { codingQuestionFor, type CodingQuestion } from "@/lib/fixtures/technical-questions";
 import type { CodeLanguage, RolePreset } from "@/lib/types";
 import { ReadinessReportCard } from "@/components/report/ReadinessReport";
+import { isRolePreset, supportsTechnicalRound } from "@/lib/interview/roles";
 import type { InterviewView } from "@/lib/interview/types";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
@@ -52,10 +53,10 @@ function InterviewRoom() {
   const params = useSearchParams();
   const router = useRouter();
   const name = params.get("name")?.slice(0, 60) || "Candidate";
-  const role = (["general", "java-sde-fresher", "frontend-fresher"].includes(params.get("role") ?? "")
-    ? params.get("role")
-    : "general") as RolePreset;
-  const round = params.get("round") === "technical" ? "technical" : "hr";
+  const requestedRole = params.get("role");
+  const role: RolePreset = isRolePreset(requestedRole) ? requestedRole : "sde";
+  // A behavioural-only role has no technical round to run.
+  const round = params.get("round") === "technical" && supportsTechnicalRound(role) ? "technical" : "hr";
   const [resume] = useState(() => {
     try {
       return window.sessionStorage.getItem("pds_resume") ?? undefined;

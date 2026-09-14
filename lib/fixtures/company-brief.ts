@@ -1,4 +1,5 @@
 import type { RolePreset } from "@/lib/types";
+import { legacyRoleOf } from "@/lib/interview/roles";
 
 // What Haris knows about the job it is interviewing you for.
 //
@@ -36,7 +37,7 @@ const BASE = {
   next: "two rounds after this, then a decision inside a week",
 };
 
-export const COMPANY_BRIEFS: Record<RolePreset, CompanyBrief> = {
+export const COMPANY_BRIEFS: Partial<Record<RolePreset, CompanyBrief>> & Record<"general", CompanyBrief> = {
   general: {
     ...BASE,
     team: "a nine-person product team, three of them freshers hired last year",
@@ -67,10 +68,90 @@ export const COMPANY_BRIEFS: Record<RolePreset, CompanyBrief> = {
     hard: "the design system is mid-migration, so you will hit two ways of doing the same thing",
     next: BASE.next,
   },
+  fullstack: {
+    ...BASE,
+    team: "a six-person product squad that owns one feature end to end, database to UI",
+    ships: "the self-serve onboarding flow for small-business customers",
+    stack: "TypeScript everywhere — Next.js on the front, Node and Postgres behind it, deployed on AWS",
+    firstMonths: "a paired feature across the API and the UI in month one, then your own small feature",
+    mentoring: "a senior full-stack engineer as your buddy and a weekly one-to-one",
+    hard: "you context-switch between SQL, APIs and CSS in the same afternoon",
+    next: BASE.next,
+  },
+  backend: {
+    ...BASE,
+    team: "the orders platform team, seven engineers running a dozen services",
+    ships: "the order, inventory and notification APIs every client app depends on",
+    stack: "Java 17 and Spring Boot, Postgres, Redis, Kafka, Kubernetes",
+    firstMonths: "fixing a real bug in a service in week two, then an endpoint of your own with review",
+    mentoring: "a named senior engineer reviews all your PRs for the first quarter",
+    hard: "latency budgets are strict and a slow query shows up on a dashboard within minutes",
+    next: BASE.next,
+  },
+  python: {
+    ...BASE,
+    team: "the internal automation team, five engineers",
+    ships: "Python services and scripts that remove manual work for the operations staff",
+    stack: "Python 3, FastAPI and Django, Postgres, Celery, deployed with Docker",
+    firstMonths: "automating one real manual workflow end to end in your first six weeks",
+    mentoring: "pair programming twice a week with a senior Python engineer",
+    hard: "some legacy scripts have no tests, so you add them before you change anything",
+    next: BASE.next,
+  },
+  "data-analyst": {
+    ...BASE,
+    team: "the analytics team, four analysts embedded with product and sales",
+    ships: "weekly business dashboards and the analysis behind pricing and growth decisions",
+    stack: "SQL on Postgres and BigQuery, Python with pandas, and Power BI dashboards",
+    firstMonths: "owning one recurring dashboard, then a small analysis presented to a product manager",
+    mentoring: "a lead analyst reviews every query and deck you ship for the first quarter",
+    hard: "stakeholders want answers in hours while the data needs cleaning first",
+    next: BASE.next,
+  },
+  devops: {
+    ...BASE,
+    team: "the platform team, five engineers supporting forty developers",
+    ships: "the CI/CD pipelines, Kubernetes clusters and monitoring every team deploys through",
+    stack: "AWS, Kubernetes, Terraform, GitHub Actions, Prometheus and Grafana",
+    firstMonths: "improving one pipeline, then shadowing on-call for a month before joining the rotation",
+    mentoring: "a senior SRE pairs with you on every production change at first",
+    hard: "on-call is real — an alert at 2am means someone's deploy is blocked",
+    next: BASE.next,
+  },
+  qa: {
+    ...BASE,
+    team: "the quality engineering group, six testers working inside product squads",
+    ships: "the regression suites and release sign-off for the customer web and mobile apps",
+    stack: "Selenium and Playwright with Java and TypeScript, Postman for APIs, Jenkins pipelines",
+    firstMonths: "manual exploratory testing of one feature, then automating its regression cases",
+    mentoring: "a QA lead reviews your test plans and bug reports for the first quarter",
+    hard: "flaky tests erode trust fast, so fixing them is part of the job",
+    next: BASE.next,
+  },
+  "ai-ml": {
+    ...BASE,
+    team: "the applied ML team, five engineers shipping models into the product",
+    ships: "the search ranking model and an LLM-based support assistant",
+    stack: "Python, PyTorch, scikit-learn, a vector database, and model serving on Kubernetes",
+    firstMonths: "reproducing an existing model's evaluation, then improving one feature of it",
+    mentoring: "a senior ML engineer reviews your experiments weekly",
+    hard: "a model that wins offline often loses in production, and you have to find out why",
+    next: BASE.next,
+  },
+  "hr-behavioural": {
+    ...BASE,
+    team: "a cross-functional graduate programme, twenty trainees rotating across teams",
+    ships: "projects in operations, customer success and product during three rotations",
+    stack: "whatever the rotation needs — the programme values communication and ownership over tools",
+    firstMonths: "a two-week induction, then your first rotation with a named manager",
+    mentoring: "a programme mentor for the whole year, plus a manager per rotation",
+    hard: "every rotation starts from zero, so you have to learn fast and ask a lot",
+    next: BASE.next,
+  },
 };
 
 export function companyBriefFor(role: RolePreset | string): CompanyBrief {
-  return COMPANY_BRIEFS[role as RolePreset] ?? COMPANY_BRIEFS.general;
+  return COMPANY_BRIEFS[role as RolePreset] ?? COMPANY_BRIEFS[legacyRoleOf(role)] ?? COMPANY_BRIEFS.general;
 }
 
 /** The prompt block. Compact on purpose — see the token note above. Anything

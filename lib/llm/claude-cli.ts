@@ -16,6 +16,7 @@ import { codingSeedFrom } from "@/lib/fixtures/technical-questions";
 import { cliAllowed, runClaude } from "@/lib/llm/cli-runner";
 import { codingAlreadyAsked, currentStage, type Stage } from "@/lib/llm/interview-stages";
 import { companyBriefBlock } from "@/lib/fixtures/company-brief";
+import { roleLabel } from "@/lib/interview/roles";
 import { TURBO_TAGS } from "@/lib/speakable";
 
 // Development-only provider: the user's authenticated Claude Code CLI is the
@@ -75,7 +76,7 @@ const ROLE_LABEL: Record<string, string> = {
  * real for that; it is a rehearsal, and rehearsals work best when everyone
  * knows what the room is. */
 function personaBlock(req: InterviewRequest): string {
-  const forRole = ROLE_LABEL[req.role] ?? "a fresher role";
+  const forRole = ROLE_LABEL[req.role] ?? `a ${roleLabel(req.role)} role`;
   const identity =
     `You are Haris, an AI built to run realistic placement interviews. You are ACTING as the interviewer ` +
     `for this round — commit to the role and run it like the real thing. You are not pretending to be a ` +

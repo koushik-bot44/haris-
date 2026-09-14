@@ -4,7 +4,23 @@ import type { ReadinessReport } from "@/lib/interview/types";
 // the scorecard, the reporting views, and the metrics pipeline with it.
 
 export type RoundType = "hr" | "technical" | "gd";
-export type RolePreset = "general" | "java-sde-fresher" | "frontend-fresher";
+/** The first three predate role families and stay valid for stored sessions;
+ * the rest are the families in lib/interview/roles.ts (ROLE_PRESETS). */
+export type RolePreset =
+  | "general"
+  | "java-sde-fresher"
+  | "frontend-fresher"
+  | "sde"
+  | "fullstack"
+  | "frontend"
+  | "backend"
+  | "java"
+  | "python"
+  | "data-analyst"
+  | "devops"
+  | "qa"
+  | "ai-ml"
+  | "hr-behavioural";
 
 export type Speaker = "interviewer" | "candidate";
 
