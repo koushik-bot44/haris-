@@ -36,8 +36,11 @@ export type AckKind = "ack" | "encourage" | "rephrase";
 // Kept SHORT and FEW on purpose: each line is pre-synthesized through the
 // voice server at mic-check, and long/many lines saturate a local one.
 export const ACK_TEXTS: Record<AckKind, string[]> = {
-  ack: ["Mm, okay.", "Right, let me think.", "Got it, one moment."],
-  encourage: ["Mm-hm — go on?"],
+  // "Mm, okay." and "Mm-hm" were spelled out letter by letter by the on-device
+  // voice ("em em, okay"); "Hmm" and "Uh-huh" are real phonemes on every engine
+  // (see lib/expressions.ts for the measurements).
+  ack: ["Hmm, okay.", "Right, let me think.", "Got it, one moment."],
+  encourage: ["Uh-huh — go on?"],
   rephrase: ["Want me to rephrase that?"],
 };
 

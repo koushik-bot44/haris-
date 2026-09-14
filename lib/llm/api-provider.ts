@@ -87,7 +87,7 @@ export const apiProvider = {
     const forced = input.forcedMove
       ? `\nYOUR MOVE HAS BEEN DECIDED: ${JSON.stringify(input.forcedMove)}. Execute exactly that move in your own words. No ${MOVE_PREFIX} line.`
       : "";
-    const prompt = `${buildPrompt(req, input.recall, { brief: input.brief, objective: input.objective })}${opening}${forced}`;
+    const prompt = `${buildPrompt(req, input.recall, { brief: input.brief, objective: input.objective, voice: req.voiceEngine })}${opening}${forced}`;
     const maxTokens = (isReasoningModel(cfg.model) ? TURN_MAX_TOKENS * 2 : TURN_MAX_TOKENS) + 60;
     const raw = await chatComplete(prompt, { signal: input.signal, maxTokens, timeoutMs: TURN_TIMEOUT_MS, temperature: input.kind === "open" ? 0.9 : 0.7 }, cfg);
     const { move, rest } = splitMoveLine(raw);

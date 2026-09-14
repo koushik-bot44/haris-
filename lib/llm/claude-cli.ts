@@ -18,6 +18,7 @@ import { codingAlreadyAsked, currentStage, type Stage } from "@/lib/llm/intervie
 import { companyBriefBlock } from "@/lib/fixtures/company-brief";
 import { roleLabel } from "@/lib/interview/roles";
 import { TURBO_TAGS } from "@/lib/speakable";
+import { expressionsGuidance, type VoiceEngineKind } from "@/lib/expressions";
 
 // Development-only provider: the user's authenticated Claude Code CLI is the
 // brain — a genuinely adaptive interviewer with NO API key, on the fastest
@@ -151,7 +152,7 @@ export function internalStateBlock(
 // is the instruction head. It is deliberately larger than the old 1700-char
 // budget — the behavioural rules ARE the product now, and at Groq speeds a few
 // hundred extra prompt tokens cost single-digit milliseconds.
-export function buildPrompt(req: InterviewRequest, recall = "", adaptive?: { brief: string; objective: string }): string {
+export function buildPrompt(req: InterviewRequest, recall = "", adaptive?: { brief: string; objective: string; voice?: VoiceEngineKind }): string {
   const { answers } = deriveProgress(req.history);
   const personaName = "Haris";
   const transcript = req.history.length ? transcriptFor(req.history, personaName) : "(nothing yet — open the interview)";
@@ -218,7 +219,7 @@ export function buildPrompt(req: InterviewRequest, recall = "", adaptive?: { bri
     // as a word by any non-Chatterbox engine ("[laugh]" spoken as "laugh").
     // Only the local Chatterbox-Turbo engine performs these; everywhere else
     // they are stripped, which is why offering them costs nothing.
-    `Speak 1-3 sentences, plain spoken English, contractions, no lists or markdown (this is read aloud). AT MOST ONE question — never stack two, and never a double-barrelled one ("…and how did you handle…?" is two: pick the sharper half, the other can wait a turn). At most one of ${TURBO_TAGS.join(" ")} per turn and usually none — only where a real interviewer would genuinely make that sound.`,
+    `Speak 1-3 sentences, plain spoken English, contractions, no lists or markdown (this is read aloud). AT MOST ONE question — never stack two, and never a double-barrelled one ("…and how did you handle…?" is two: pick the sharper half, the other can wait a turn). ${adaptive ? expressionsGuidance(adaptive.voice ?? "kokoro") : `At most one of ${TURBO_TAGS.join(" ")} per turn and usually none — only where a real interviewer would genuinely make that sound.`}`,
     adaptive
       ? `Follow the interview plan below: it decides what to find out next; you decide how to say it. ${topicSource}`
       : `Work through the stages below in order, going properly deep in each before moving on, then wrap up warmly with done true. ${topicSource}`,

@@ -204,6 +204,8 @@ export interface InterviewRequest {
   codeLanguage?: CodeLanguage;
   /** Optional job description — re-weights the interview plan. */
   jobDescription?: string;
+  /** The engine that will speak the reply — decides which expressions are safe. */
+  voiceEngine?: "chatterbox" | "kokoro" | "system" | "cloud" | "elevenlabs";
   /** Signed interview state from the previous turn (lib/interview/token.ts). */
   state?: string;
   history: HistoryEntry[];

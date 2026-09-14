@@ -34,6 +34,7 @@ export const interviewRequestSchema = z.object({
   profile: resumeProfileSchema.optional(),
   codeLanguage: z.enum(["java", "python", "cpp", "javascript", "c"]).optional(),
   jobDescription: z.string().max(4000).optional(),
+  voiceEngine: z.enum(["chatterbox", "kokoro", "system", "cloud", "elevenlabs"]).optional(),
   state: z.string().max(200_000).optional(),
   history: z
     .array(

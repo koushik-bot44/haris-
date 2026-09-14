@@ -24,20 +24,46 @@ function objectEnd(text: string, start: number): number {
   return -1;
 }
 
+/** Models improvise the marker: "@MOVE", "MOVE:", or a bare {"action":…}
+ * object. Every form is removed from the spoken text; only a real object is
+ * kept as the move. A capitalised "Move" inside speech survives because the
+ * marker must be followed by an object. */
+const MOVE_MARKER = /(?:^|\n)[ \t]*@{0,3}[ \t]*MOVE\b[ \t]*:?[ \t]*(?=\{)|@@\s*MOVE\b\s*:?\s*(?=\{)/i;
+const BARE_MOVE_LINE = /^[ \t]*@*[ \t]*\{[^}]*"action"\s*:[^}]*\}?[ \t]*$/;
+
 export function splitMoveLine(raw: string): { move: unknown | null; rest: string } {
-  const m = /@@\s*MOVE\b\s*:?\s*/i.exec(raw);
-  if (!m) return { move: null, rest: raw };
-  const after = m.index + m[0].length;
-  if (raw[after] !== "{") return { move: null, rest: (raw.slice(0, m.index) + raw.slice(after)).trim() };
-  const end = objectEnd(raw, after);
+  const m = MOVE_MARKER.exec(raw);
   let move: unknown = null;
-  try {
-    move = JSON.parse(raw.slice(after, end === -1 ? undefined : end + 1));
-  } catch {
-    move = null;
+  let rest = raw;
+  if (m) {
+    const after = m.index + m[0].length;
+    const end = objectEnd(raw, after);
+    try {
+      move = JSON.parse(raw.slice(after, end === -1 ? undefined : end + 1));
+    } catch {
+      move = null;
+    }
+    rest = raw.slice(0, m.index) + (end === -1 ? "" : raw.slice(end + 1));
   }
-  const rest = (raw.slice(0, m.index) + (end === -1 ? "" : raw.slice(end + 1))).trim();
-  return { move, rest };
+  // A move object on its own line with no marker at all.
+  const lines = rest.split(/\r?\n/);
+  const kept: string[] = [];
+  for (const line of lines) {
+    if (BARE_MOVE_LINE.test(line)) {
+      if (move === null) {
+        try {
+          const at = line.indexOf("{");
+          const end = objectEnd(line, at);
+          move = JSON.parse(line.slice(at, end === -1 ? undefined : end + 1));
+        } catch {
+          move = null;
+        }
+      }
+      continue;
+    }
+    kept.push(line);
+  }
+  return { move, rest: kept.join("\n").trim() };
 }
 
 /** The private `note` a model may add to its control line — context for later
