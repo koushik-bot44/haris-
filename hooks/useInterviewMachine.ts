@@ -63,6 +63,7 @@ interface TurnMeta {
   state?: string;
   view?: InterviewView;
   report?: ReadinessReport;
+  scores?: RubricEntry[];
 }
 
 interface InterviewExtras {
@@ -169,6 +170,9 @@ const CAPABILITY_WAIT_MS = 1200;
  * only ever collects echo candidates — and the overlap test still keeps every
  * word that turns out to be theirs. */
 const ECHO_TAIL_GRACE_MS = 900;
+/** A dropped connection retries on its own this many times before the room
+ * waits for the candidate's click. */
+const MAX_AUTO_RETRIES = 2;
 
 /** An in-flight speculative /api/interview call plus its pre-synthesized audio.
  * Used both for the opening pre-warm (empty history, basisWords 0) and for
@@ -330,12 +334,21 @@ export function useInterviewMachine(
   /** Signed adaptive-interview state from the last turn actually used — sent back on every request. */
   const stateTokenRef = useRef<string | null>(null);
   const reportRef = useRef<ReadinessReport | null>(null);
+  /** Rubric entries computed on the server from verified state (adaptive rounds). */
+  const serverScoresRef = useRef<RubricEntry[] | null>(null);
+  const autoRetriesRef = useRef(0);
+  const autoRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const callInterviewerRef = useRef<() => Promise<void>>(async () => {});
   const [view, setView] = useState<InterviewView | null>(null);
   const adoptMeta = (d: TurnMeta | null | undefined) => {
     if (!d) return;
     if (typeof d.state === "string") stateTokenRef.current = d.state;
     if (d.view) setView(d.view);
     if (d.report) reportRef.current = d.report;
+    if (Array.isArray(d.scores)) {
+      serverScoresRef.current = d.scores;
+      setScores(d.scores);
+    }
   };
   if (extrasRef.current === null) extrasRef.current = readInterviewExtras();
   /** Barge-in as the long-lived callbacks see it (deliverTurn is memoized). */
@@ -495,6 +508,8 @@ export function useInterviewMachine(
     openingRef.current = null;
     streamAbortRef.current?.abort();
     streamAbortRef.current = null;
+    if (autoRetryTimerRef.current) clearTimeout(autoRetryTimerRef.current);
+    autoRetryTimerRef.current = null;
     stopMicViz();
     setVizMode("idle");
   }, []);
@@ -705,7 +720,9 @@ export function useInterviewMachine(
       Promise.allSettled(pendingScoresRef.current),
       new Promise((r) => setTimeout(r, 8000)),
     ]);
-    const scoredEntries = [...scoresRef.current.values()].sort((a, b) => a.questionId - b.questionId);
+    // Adaptive rounds are scored on the server from verified state; the per-answer
+    // /api/score path remains for a server that does not send scores.
+    const scoredEntries = (serverScoresRef.current?.length ? [...serverScoresRef.current] : [...scoresRef.current.values()]).sort((a, b) => a.questionId - b.questionId);
     const perAnswer: DeliveryMetrics[] = answersRef.current.map((a) =>
       computeDeliveryMetrics(a.trace, a.transcript),
     );
@@ -847,7 +864,7 @@ export function useInterviewMachine(
       // Background scoring: follow-up answers concatenate onto the parent
       // question's transcript (plan: one rubric entry per questionId).
       const q = currentQuestionRef.current;
-      if (q && text !== NO_ANSWER) {
+      if (q && text !== NO_ANSWER && !stateTokenRef.current) {
         const combined = [combinedAnswersRef.current.get(q.id), scoringText].filter(Boolean).join(" ");
         combinedAnswersRef.current.set(q.id, combined);
         fireScoring(q.id, q.text, combined);
@@ -1253,6 +1270,7 @@ export function useInterviewMachine(
         live?.queue.cancel();
         return;
       }
+      autoRetriesRef.current = 0;
       await deliverTurn(turn, null, false, live);
       return;
     } catch {
@@ -1260,6 +1278,7 @@ export function useInterviewMachine(
       setPhase("thinking"); // a cancelled first utterance may have flipped visuals
     }
     let turn: InterviewerTurn;
+    let quotaSpent = false;
     try {
       const res = await fetch("/api/interview", {
         method: "POST",
@@ -1277,7 +1296,8 @@ export function useInterviewMachine(
           if (msg && !endedRef.current) {
             setError(msg);
             // A spent daily quota is a dead end; a "slow down" is not.
-            setErrorKind(/budget|quota|tomorrow/i.test(msg) ? "quota" : "throttle");
+            quotaSpent = /budget|quota|tomorrow/i.test(msg);
+            setErrorKind(quotaSpent ? "quota" : "throttle");
           }
         }
         throw new Error(`api_${res.status}`);
@@ -1289,11 +1309,25 @@ export function useInterviewMachine(
       // A retried turn must not record the outage + human reaction time as
       // interviewer latency — drop the anchor for this turn.
       answerEndTRef.current = null;
-      if (!endedRef.current) setPhase("connectionLost");
+      if (!endedRef.current) {
+        setPhase("connectionLost");
+        // Never leave the candidate stranded: a dropped connection retries on its
+        // own, backing off; a spent quota waits for the button instead.
+        if (!quotaSpent && autoRetriesRef.current < MAX_AUTO_RETRIES) {
+          autoRetriesRef.current++;
+          if (autoRetryTimerRef.current) clearTimeout(autoRetryTimerRef.current);
+          autoRetryTimerRef.current = setTimeout(() => {
+            autoRetryTimerRef.current = null;
+            if (!endedRef.current) void callInterviewerRef.current();
+          }, 2500 * autoRetriesRef.current);
+        }
+      }
       return;
     }
+    autoRetriesRef.current = 0;
     await deliverTurn(turn, null, false);
   }, [deliverTurn, requestBody, streamTurn]);
+  callInterviewerRef.current = callInterviewer;
 
   const endAnswer = useCallback(async () => {
     clearSilenceTimer();
@@ -1563,6 +1597,10 @@ export function useInterviewMachine(
   }, [callInterviewer, deliverTurn]);
 
   const retryConnection = useCallback(() => {
+    if (autoRetryTimerRef.current) {
+      clearTimeout(autoRetryTimerRef.current);
+      autoRetryTimerRef.current = null;
+    }
     setError(null);
     setErrorKind(null);
     void callInterviewer();

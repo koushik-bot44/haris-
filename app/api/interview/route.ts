@@ -126,6 +126,7 @@ export async function POST(req: Request) {
       provider: provider.name,
       state: out.state,
       view: out.view,
+      scores: out.scores,
       ...(out.report ? { report: out.report } : {}),
     });
     if ((body as { stream?: unknown }).stream === true) {

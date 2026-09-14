@@ -73,6 +73,7 @@ export function planBlock(s: InterviewState): string {
   if (open.length) {
     lines.push(`Possible contradictions: ${open.map((c) => `[${c.id}] earlier "${c.quoteA}" vs later "${c.quoteB}"`).join(" · ")}.`);
   }
+  if (s.phase === "coding") lines.push("They are solving the coding exercise right now: never hint at the approach, the data structure or the solution — only clarify the problem statement if asked.");
   if (s.notes.length) lines.push(`Your private notes: ${s.notes.slice(-3).join(" | ")}.`);
   return lines.join("\n");
 }

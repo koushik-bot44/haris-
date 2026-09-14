@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { validateMove } from "@/lib/interview/actions";
 import { buildBrief, objectiveLine } from "@/lib/interview/brief";
-import { commit, decide, ingest, initState, moveContext, viewOf } from "@/lib/interview/engine";
+import { commit, decide, ingest, initState, mergeModelAnalysis, moveContext, viewOf } from "@/lib/interview/engine";
 import { fallbackText } from "@/lib/interview/fallback";
 import { buildReadinessReport } from "@/lib/interview/report";
 import { historyHash, signState, verifyState } from "@/lib/interview/token";
@@ -20,9 +20,10 @@ import {
   rememberAskedQuestion,
   wasAlreadyAsked,
 } from "@/lib/memory";
+import { analyzeAnswers, pendingAnswers } from "@/lib/llm/analyze";
 import type { AdaptiveLLMProvider } from "@/lib/llm/provider";
 import { stripSpeechTags } from "@/lib/speakable";
-import type { InterviewerTurn, InterviewerTurnType, InterviewRequest } from "@/lib/types";
+import type { InterviewerTurn, InterviewerTurnType, InterviewRequest, RubricEntry } from "@/lib/types";
 
 // One adaptive interviewer turn, end to end:
 //
@@ -35,9 +36,10 @@ import type { InterviewerTurn, InterviewerTurnType, InterviewRequest } from "@/l
 //         no model / failure → the deterministic interviewer executes the move
 //     → commit, sign, return turn + state + view (+ report when the round ends)
 //
-// Cost: exactly one interviewer call per turn on the happy path. No background
-// call is added here — per-answer rubric scoring keeps its existing single
-// background call (/api/score), so a turn never spends more than it did before.
+// Cost: one interviewer call per turn on the happy path, plus at most one small
+// background-model call (lib/llm/analyze.ts) that assesses the newest answers.
+// That call replaces the client's separate /api/score request, so a turn never
+// spends more than it did before, and it runs in parallel so it adds no latency.
 
 export interface AdaptiveTurnOptions {
   provider: AdaptiveLLMProvider;
@@ -52,6 +54,8 @@ export interface AdaptiveTurnResult {
   state: string;
   view: InterviewView;
   report: ReadinessReport | null;
+  /** Per-thread rubric entries for the scorecard, computed on the server. */
+  scores: RubricEntry[];
 }
 
 const CODING_LEAD_INS = [
@@ -59,6 +63,20 @@ const CODING_LEAD_INS = [
   "Let's switch gears and get you writing something. The editor is open — talk me through your thinking in comments if you like, and submit when you're happy with it.",
   "Good — now let's see some code. Use the editor, comment as much or as little as you want, and submit when ready.",
 ];
+
+/** How long a turn may wait, in total, for the background assessment; and the
+ * least it waits after the interviewer's words are ready. A late result is not
+ * lost — those answers stay pending and are assessed on the next turn. */
+const ANALYSIS_BUDGET_MS = 5_000;
+const ANALYSIS_GRACE_MS = 600;
+
+function waitAtMost<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
 
 function hashIndex(seed: string, mod: number): number {
   let h = 0x811c9dc5;
@@ -178,6 +196,17 @@ export async function runAdaptiveTurn(req: InterviewRequest, opts: AdaptiveTurnO
   const last = analyses[analyses.length - 1] ?? null;
   const decision = decide(ingested, req.history, last, now);
 
+  // The one background call this turn may spend, started now so it runs in
+  // parallel with the interviewer's. Never on a speculative pre-fetch.
+  const started = Date.now();
+  const batch = opts.speculative ? [] : pendingAnswers(ingested, req.history);
+  const assessment = batch.length
+    ? analyzeAnswers(ingested, req.history, batch).catch((err) => {
+        console.warn(`[interview] background assessment failed, keeping the deterministic reading — ${err instanceof Error ? err.message : String(err)}`);
+        return null;
+      })
+    : Promise.resolve(null);
+
   // Long-term memory: primed at session start, read from cache afterwards —
   // never awaited on the turn path.
   const subject = opts.memoryKey?.trim() ?? "";
@@ -207,6 +236,8 @@ export async function runAdaptiveTurn(req: InterviewRequest, opts: AdaptiveTurnO
     now,
   );
   state = { ...state, historyLen: req.history.length, historyHash: historyHash(req.history) };
+  const assessed = await waitAtMost(assessment, Math.max(ANALYSIS_GRACE_MS, ANALYSIS_BUDGET_MS - (Date.now() - started)));
+  if (assessed?.length) state = mergeModelAnalysis(state, assessed, req.history, now);
 
   const done = decision.kind === "close";
   const pos = state.threads.findIndex((t) => t.id === state.thread.startTurn);
@@ -231,5 +262,6 @@ export async function runAdaptiveTurn(req: InterviewRequest, opts: AdaptiveTurnO
     state: signState(state),
     view: viewOf(state),
     report: done ? buildReadinessReport(state, req.history, now) : null,
+    scores: state.threads.map((t) => t.entry).filter((e): e is RubricEntry => Boolean(e)),
   };
 }
