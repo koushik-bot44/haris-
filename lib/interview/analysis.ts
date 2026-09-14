@@ -1,6 +1,6 @@
 import { COMPETENCIES } from "@/lib/interview/roles";
 import type { AnswerAnalysis, AnswerFlag, AnswerQuality, AnswerSignals, InterviewPlan } from "@/lib/interview/types";
-import { isNoAnswer, looksLikeCandidateQuestion } from "@/lib/llm/parse";
+import { isNoAnswer, isPartialCapture, looksLikeCandidateQuestion, stripCaptureMarks } from "@/lib/llm/parse";
 
 // Deterministic reading of one answer: how much real substance it carries, which
 // competencies it is evidence for, and what an interviewer would notice about it
@@ -157,10 +157,14 @@ function defaultCompetency(plan: InterviewPlan): string | null {
   return ids[0] ?? null;
 }
 
-export function analyzeAnswer(text: string, ctx: AnalysisContext): AnswerAnalysis {
+export function analyzeAnswer(rawText: string, ctx: AnalysisContext): AnswerAnalysis {
+  // A recogniser marker is a fact about the capture, not about the answer.
+  const partial = isPartialCapture(rawText);
+  const text = partial ? stripCaptureMarks(rawText) : rawText;
   const signals = readSignals(text, ctx.plan.resume?.projects ?? []);
   const quality = qualityOf(text, signals);
   const flags: AnswerFlag[] = [];
+  if (partial) flags.push("partial");
   if (signals.code) flags.push("code");
   if (signals.hedges >= 2) flags.push("hedged");
   if (signals.question && signals.words < 30 && quality !== "strong" && quality !== "adequate") flags.push("asked-question");

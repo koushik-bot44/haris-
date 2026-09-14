@@ -266,3 +266,85 @@ describe("ephemeral STT engine override (a transient degrade must not persist)",
     expect(getSttEngine()).toBe("auto"); // back to the (unset) stored preference
   });
 });
+
+describe("what an answer records when the recogniser fails", () => {
+  it("counts in-flight segments and their outcomes", async () => {
+    const { answerTextFor, captureOutcome, initialSttState, sttReduce } = await import("@/lib/stt-reducer");
+    let s = initialSttState();
+    s = sttReduce(s, { type: "START", t: 0 }).state;
+    s = sttReduce(s, { type: "SPEECH_ACTIVITY", t: 100 }).state;
+    s = sttReduce(s, { type: "SEGMENT_SENT", t: 200 }).state;
+    expect(s.pending).toBe(1);
+    s = sttReduce(s, { type: "SEGMENT_SETTLED", t: 900, outcome: "lost" }).state;
+    expect(s.pending).toBe(0);
+    expect(s.lostSegments).toBe(1);
+    // Spoke, nothing came back → unheard, never "(no answer)".
+    expect(answerTextFor("", captureOutcome(s))).toBe("(unheard)");
+    // A later segment worked → the answer is partial, marked as such.
+    s = sttReduce(s, { type: "RESULT", t: 1500, text: "and then I fixed the bug", isFinal: true }).state;
+    expect(answerTextFor("and then I fixed the bug", captureOutcome(s))).toBe("and then I fixed the bug (part of the answer was not captured)");
+  });
+
+  it("true silence is still silence, and a clean capture is untouched", async () => {
+    const { answerTextFor, initialSttState, captureOutcome } = await import("@/lib/stt-reducer");
+    expect(answerTextFor("", captureOutcome(initialSttState()))).toBe("(no answer)");
+    expect(answerTextFor("", undefined)).toBe("(no answer)");
+    expect(answerTextFor("  I built it myself.  ", { heard: true, lost: 0, empty: 0 })).toBe("I built it myself.");
+  });
+});
+
+describe("segment order follows the speech, not the transcriber", () => {
+  // Browser run (timeout scenario): the first segment's request hung, timed
+  // out at 12 s and was retried; its text came back AFTER the second segment
+  // and was appended — the interviewer read "…only one order can exist per
+  // listing. The hardest part was…". A batch result carries the time its
+  // speech ended, and that is where it belongs.
+  it("puts a late (retried) segment back where it was spoken", () => {
+    const { state } = run([
+      { type: "START", t: 0 },
+      { type: "SEGMENT_SENT", t: 3000 },
+      { type: "SEGMENT_SENT", t: 6000 },
+      { type: "RESULT", t: 6000, text: "Only one order can exist per listing.", isFinal: true },
+      { type: "SEGMENT_SETTLED", t: 7000, outcome: "ok" },
+      { type: "RESULT", t: 3000, text: "I fixed it by adding a unique check so", isFinal: true },
+      { type: "SEGMENT_SETTLED", t: 15_000, outcome: "ok" },
+      { type: "STOP", t: 16_000 },
+    ]);
+    expect(fullTranscript(state)).toBe("I fixed it by adding a unique check so Only one order can exist per listing.");
+    expect(state.pending).toBe(0);
+  });
+
+  it("also after the answer closed (a late final in the stopped phase)", () => {
+    const { state } = run([
+      { type: "START", t: 0 },
+      { type: "SEGMENT_SENT", t: 3000 },
+      { type: "SEGMENT_SENT", t: 6000 },
+      { type: "RESULT", t: 6000, text: "and after that it never happened again.", isFinal: true },
+      { type: "STOP", t: 9000 },
+      { type: "RESULT", t: 3000, text: "The hardest part was a race on checkout,", isFinal: true },
+    ]);
+    expect(fullTranscript(state)).toBe("The hardest part was a race on checkout, and after that it never happened again.");
+  });
+
+  it("a revision of an earlier segment still merges into it, wherever it lands", () => {
+    const { state } = run([
+      { type: "START", t: 0 },
+      { type: "RESULT", t: 3000, text: "we used redis", isFinal: true },
+      { type: "RESULT", t: 6000, text: "for the session cache.", isFinal: true },
+      { type: "RESULT", t: 3000, text: "We used Redis.", isFinal: true },
+    ]);
+    expect(state.finalSegments).toEqual(["We used Redis.", "for the session cache."]);
+  });
+
+  it("Chrome's in-order results are unaffected", () => {
+    const { state } = run([
+      { type: "START", t: 0 },
+      { type: "RESULT", t: 100, text: "my name is", isFinal: false },
+      { type: "RESULT", t: 900, text: "my name is hari", isFinal: true },
+      { type: "RESULT", t: 1400, text: "and I study CS", isFinal: true },
+      { type: "STOP", t: 2000 },
+    ]);
+    expect(fullTranscript(state)).toBe("my name is hari and I study CS");
+    expect(state.finalEnds).toEqual([900, 1400]);
+  });
+});

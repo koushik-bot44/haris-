@@ -10,6 +10,7 @@ import { GREETING } from "@/lib/fixtures/hr-questions";
 import { TECH_GREETING } from "@/lib/fixtures/technical-questions";
 import { composeResumeGreeting } from "@/lib/llm/interview-flow";
 import { extractQuestion } from "@/lib/memory";
+import { isUnheard } from "@/lib/llm/parse";
 import type { ResumeProfile } from "@/lib/types";
 
 // The deterministic interviewer — what speaks when no model can.
@@ -109,6 +110,11 @@ const CLARIFIES = [
 function clarify(s: InterviewState, last: AnswerAnalysis | null, lastQuestion: string, answers: readonly string[], engine: VoiceEngineKind): string {
   if (!last || last.quality === "silent") {
     const q = extractQuestion(lastQuestion);
+    if (last && isUnheard(last.text)) {
+      return q
+        ? `I could hear you, but the words didn't come through on my end — sorry about that. Could you say that once more? ${q}`
+        : "I could hear you, but the words didn't come through on my end — sorry about that. Could you say that once more?";
+    }
     return q ? `Sorry, I didn't catch anything there. Let me put it another way: ${q}` : "Sorry, I didn't catch that — take a moment. What comes to mind first?";
   }
   if (last.quality === "tap-out") {

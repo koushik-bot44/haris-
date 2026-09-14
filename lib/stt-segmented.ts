@@ -9,6 +9,7 @@
 // function, and the results flow into the same reducer as Chrome's
 // recognizer — the machine, silence timer, and metrics work unchanged.
 
+import { anySignal } from "@/lib/abort";
 import { initialSttState, sttReduce, type SttState } from "@/lib/stt-reducer";
 import type { SttSession } from "@/lib/stt";
 import { DEFAULT_VAD, initialVadState, vadStep } from "@/lib/vad";
@@ -127,6 +128,51 @@ export class CaptureBuffer {
 
 export type SegmentTranscriber = (audio16k: Float32Array, signal: AbortSignal) => Promise<string>;
 
+/** A transcription request that has not answered in this long is given up on
+ * and retried once. Cloud Whisper answers in well under a second; a request
+ * that takes twelve is a hung connection, not a slow one. */
+export const SEGMENT_TIMEOUT_MS = 12_000;
+export const SEGMENT_RETRY_DELAY_MS = 600;
+
+export type SegmentOutcome = { outcome: "ok"; text: string } | { outcome: "empty" } | { outcome: "lost"; error: string } | { outcome: "aborted" };
+
+/** One segment through the transcriber: a per-segment deadline, one retry on
+ * failure or timeout, and an explicit outcome so the room can tell "no words
+ * in this audio" from "the recogniser lost this audio". A failed segment used
+ * to vanish silently, and the answer it belonged to came back as silence. */
+export async function transcribeWithRetry(
+  transcribe: SegmentTranscriber,
+  audio: Float32Array,
+  session: AbortSignal,
+  opts: { timeoutMs?: number; retryDelayMs?: number; retries?: number } = {},
+): Promise<SegmentOutcome> {
+  const timeoutMs = opts.timeoutMs ?? SEGMENT_TIMEOUT_MS;
+  const retries = opts.retries ?? 1;
+  let lastError = "transcribe_failed";
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (session.aborted) return { outcome: "aborted" };
+    if (attempt > 0) await new Promise((r) => setTimeout(r, opts.retryDelayMs ?? SEGMENT_RETRY_DELAY_MS));
+    const seg = new AbortController();
+    const timer = setTimeout(() => seg.abort(new DOMException("segment timeout", "TimeoutError")), timeoutMs);
+    try {
+      const raw = await transcribe(audio, anySignal([session, seg.signal]));
+      clearTimeout(timer);
+      if (session.aborted) return { outcome: "aborted" };
+      const text = raw.trim().replace(/^\[.*?\]\s*/g, "");
+      if (!text || looksLikeHallucination(text)) return { outcome: "empty" };
+      return { outcome: "ok", text };
+    } catch (err) {
+      clearTimeout(timer);
+      if (session.aborted) return { outcome: "aborted" };
+      const msg = err instanceof Error ? err.message : "";
+      // No point retrying into the same rate-limited minute.
+      if (msg === "rate_limited") return { outcome: "lost", error: "rate_limited" };
+      lastError = seg.signal.aborted ? "timeout" : msg === "network" ? "network" : "transcribe_failed";
+    }
+  }
+  return { outcome: "lost", error: lastError };
+}
+
 export interface SegmentedSttOptions {
   /** How long stopAndSettle waits for in-flight transcriptions. */
   settleMs?: number;
@@ -179,17 +225,23 @@ export function startSegmentedStt(
     capture.trimBefore(capture.sampleAt(endT) - Math.floor(sampleRate * 0.5));
     if (segment.length < sampleRate * 0.2) return;
     const audio = downsample(segment, sampleRate);
-    const p = transcribe(audio, abort.signal)
-      .then((raw) => {
-        const text = raw.trim().replace(/^\[.*?\]\s*/g, "");
-        if (looksLikeHallucination(text)) return;
+    dispatch({ type: "SEGMENT_SENT", t: Date.now() });
+    const p = transcribeWithRetry(transcribe, audio, abort.signal).then((r) => {
+      if (r.outcome === "aborted") return;
+      if (r.outcome === "ok") {
         // Post-stop finals flow through the reducer's stopped-phase handling.
-        dispatch({ type: "RESULT", t: endT, text, isFinal: true });
-      })
-      .catch((err) => {
-        if (abort.signal.aborted) return;
-        dispatch({ type: "ERROR", t: Date.now(), error: err instanceof Error && err.message === "network" ? "network" : errorCode });
-      });
+        dispatch({ type: "RESULT", t: endT, text: r.text, isFinal: true });
+        dispatch({ type: "SEGMENT_SETTLED", t: Date.now(), outcome: "ok" });
+        return;
+      }
+      if (r.outcome === "empty") {
+        dispatch({ type: "SEGMENT_SETTLED", t: Date.now(), outcome: "empty" });
+        return;
+      }
+      const code = r.error === "rate_limited" ? "cloud_rate_limited" : r.error === "network" || r.error === "timeout" ? "network" : errorCode;
+      dispatch({ type: "SEGMENT_SETTLED", t: Date.now(), outcome: "lost" });
+      dispatch({ type: "ERROR", t: Date.now(), error: code });
+    });
     inflight.push(p);
   };
 

@@ -23,7 +23,7 @@ import {
   type SttSession,
 } from "@/lib/stt";
 import { ensureWhisperLoading } from "@/lib/stt-whisper";
-import { fullTranscript, type SttState } from "@/lib/stt-reducer";
+import { answerTextFor, captureOutcome, fullTranscript, type CaptureOutcome, type SttState } from "@/lib/stt-reducer";
 import { getVoiceEngine, prepareSpeak, resolveVoiceEngine, speak, unlockAudio, type PreparedSpeech, type SpeakHandle, type VoiceEngine } from "@/lib/tts";
 import { kokoroProgress, kokoroStatus } from "@/lib/tts-kokoro";
 
@@ -55,7 +55,7 @@ import {
 import { voiceForRound } from "@/lib/voices";
 import { codingQuestionFor, codingSeedFrom, TECH_PERSONA, type CodingQuestion } from "@/lib/fixtures/technical-questions";
 import { setVizMode, startMicViz, stopMicViz } from "@/lib/audio-viz";
-import { NO_ANSWER } from "@/lib/llm/parse";
+import { isNoAnswer, NO_ANSWER } from "@/lib/llm/parse";
 import type { InterviewView, ReadinessReport } from "@/lib/interview/types";
 
 /** What an adaptive turn carries besides the turn itself. */
@@ -202,6 +202,11 @@ const MAX_SPECULATIONS_PER_ANSWER = 2;
 /** Energy heard but no words yet: a batch transcriber (Whisper / cloud) is
  * still working — hold this long before treating it as noise. */
 const TRANSCRIPT_LAG_GRACE_MS = 4000;
+/** While a segment is still with the transcriber, the answer is not over — a
+ * slow or retried request must not turn a spoken answer into silence. */
+const TRANSCRIBE_WAIT_MS = 14_000;
+/** How long endAnswer waits for a transcription that is still in flight. */
+const SETTLE_PENDING_MS = 8_000;
 /** Longest the mic check will wait on the engine probe before starting anyway. */
 const CAPABILITY_WAIT_MS = 1200;
 /** How long after the mic becomes the candidate's a newly transcribed segment
@@ -894,11 +899,13 @@ export function useInterviewMachine(
   }, []);
 
   const recordAnswer = useCallback(
-    (transcript: string, trace: SttTraceEvent[], endT: number) => {
+    (transcript: string, trace: SttTraceEvent[], endT: number, capture?: CaptureOutcome) => {
       // Nudge/ack lines played through the speakers can be re-transcribed at
       // the answer's edges (no echo filter on that path) — scrub them.
       const scrubbed = codingActiveRef.current ? transcript : stripAckEcho(transcript, ALL_ACK_LINES);
-      const text = scrubbed.trim() || NO_ANSWER;
+      // Silence, "heard but nothing came back", or "part of it was lost" — the
+      // interviewer reacts to each differently (lib/stt-reducer answerTextFor).
+      const text = answerTextFor(scrubbed, capture);
       // History entries are clamped to the schema cap so one giant pasted
       // answer can't 400 every later /api/interview call; turnsRef/answersRef
       // keep the full text for the transcript and scoring.
@@ -915,7 +922,7 @@ export function useInterviewMachine(
       // Code answers are fenced so the scorer and the interviewer both see
       // them as code, and the session records the coding module was exercised.
       let scoringText = text;
-      if (codingActiveRef.current && text !== NO_ANSWER) {
+      if (codingActiveRef.current && !isNoAnswer(text)) {
         codingUsedRef.current = true;
         scoringText = "```\n" + text + "\n```";
         historyRef.current[historyRef.current.length - 1].text = clampHistoryText(scoringText);
@@ -926,7 +933,7 @@ export function useInterviewMachine(
       // Background scoring: follow-up answers concatenate onto the parent
       // question's transcript (plan: one rubric entry per questionId).
       const q = currentQuestionRef.current;
-      if (q && text !== NO_ANSWER && !stateTokenRef.current) {
+      if (q && !isNoAnswer(text) && !stateTokenRef.current) {
         const combined = [combinedAnswersRef.current.get(q.id), scoringText].filter(Boolean).join(" ");
         combinedAnswersRef.current.set(q.id, combined);
         fireScoring(q.id, q.text, combined);
@@ -1407,7 +1414,7 @@ export function useInterviewMachine(
     // Speak the ack immediately (the latency mask), then let Chrome finalize
     // buffered audio — the last words of the answer arrive AFTER stop().
     speakAck();
-    const st = await sess.stopAndSettle();
+    const st = await sess.stopAndSettle(sess.getState().pending > 0 ? SETTLE_PENDING_MS : undefined);
     if (endedRef.current) return; // cleanup already cancelled any speculation
     // Consume the newest speculation only AFTER settle — the ticker is dead
     // (clearSilenceTimer above), so no fresher one can appear underneath us.
@@ -1424,7 +1431,7 @@ export function useInterviewMachine(
     adoptedEchoRef.current = null;
     // The FINAL transcript goes to history/answers — scoring and the LLM's
     // next call always see the truth, never the speculative partial.
-    recordAnswer(transcript, trace, st.lastSpeechT ?? Date.now());
+    recordAnswer(transcript, trace, st.lastSpeechT ?? Date.now(), captureOutcome(st));
     if (spec && !spec.cancelled && acceptSpeculation(spec.basisWords, countWords(transcript))) {
       // The candidate barely added words after the speculative basis: the
       // cached turn is still the right reply — skip the live LLM call and play
@@ -1548,7 +1555,7 @@ export function useInterviewMachine(
         // Energy heard but no words yet: a batch transcriber is still working
         // on it — hold rather than nudge into it. Past the grace window it
         // was echo or noise, and the silence policy applies.
-        else if (now - anchor < TRANSCRIPT_LAG_GRACE_MS) msSinceLastSpeech = 0;
+        else if (now - anchor < TRANSCRIPT_LAG_GRACE_MS || (st.pending > 0 && now - anchor < TRANSCRIBE_WAIT_MS)) msSinceLastSpeech = 0;
       }
       const snapshot: ListenSnapshot = {
         msSinceListenStart: now - listenStartT,

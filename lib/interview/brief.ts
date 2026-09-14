@@ -5,6 +5,7 @@ import { MOVE_PREFIX } from "@/lib/interview/moveline";
 import { COMPETENCIES, competencyLabel, DIFFICULTY_LABEL } from "@/lib/interview/roles";
 import type { InterviewState, MoveOption, ProposedMove, TurnDecision } from "@/lib/interview/types";
 import { extractQuestion } from "@/lib/memory";
+import { isUnheard } from "@/lib/llm/parse";
 
 // The interview state rendered for the model: situational awareness plus the
 // short list of moves it may choose from. This replaces the old answer-count
@@ -122,7 +123,8 @@ function lastAnswerLine(d: TurnDecision): string {
   const flags = a.flags.filter((f) => f !== "code");
   const specifics = a.signals.techTerms.length ? `; they named: ${a.signals.techTerms.slice(0, 5).join(", ")}` : "";
   const covered = a.quality === "strong" || a.quality === "adequate" ? " It answered the question — do not ask for the same explanation again." : "";
-  return `Their last answer read as: ${a.quality}${flags.length ? ` (${flags.join(", ")})` : ""}${specifics}.${covered}`;
+  const partial = a.flags.includes("partial") ? " Part of it was NOT captured by the microphone — never treat the missing part as something they failed to say; work with what came through, or ask them to repeat just the missing bit." : "";
+  return `Their last answer read as: ${a.quality}${flags.length ? ` (${flags.filter((f) => f !== "partial").join(", ")})` : ""}${specifics}.${covered}${partial}`;
 }
 
 /** The kind-specific instruction — what THIS turn must do. */
@@ -198,7 +200,11 @@ export function objectiveLine(s: InterviewState, d: TurnDecision): string {
     case "close":
       return "close warmly and finish (done true)";
     default:
-      if (d.last?.quality === "silent") return "nothing was heard — say so briefly (you didn't catch that), then put the same question again in simpler words";
+      if (d.last?.quality === "silent") {
+        return isUnheard(d.last.text)
+          ? "they DID speak but the words did not come through on your end — say exactly that (never that they were silent), then ask them to say it once more"
+          : "nothing was heard — say so briefly (you didn't catch that), then put the same question again in simpler words";
+      }
       return d.recommended
         ? `make one move from the list (recommended: ${describeMove(d.recommended)}), reacting to what they just said first, and asking only for what they have NOT already told you`
         : "react to what they just said, then make one move from the list";

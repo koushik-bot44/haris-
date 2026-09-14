@@ -318,9 +318,30 @@ export interface Progress {
  * silence, a failed mic, or the candidate giving up on a question. It is NOT an
  * answer, and treating it as one is how an interview walks off without you. */
 export const NO_ANSWER = "(no answer)";
+/** Recorded when the microphone HEARD the candidate but no words came back
+ * from the recogniser (a failed or empty transcription). Not silence: the
+ * interviewer must say the words did not come through, never behave as if the
+ * candidate had said nothing. */
+export const UNHEARD = "(unheard)";
+/** Appended to an answer when one of its segments was lost by the recogniser —
+ * the missing part must not be read as "they did not say it". */
+export const PARTIAL_MARK = "(part of the answer was not captured)";
 
 export function isNoAnswer(text: string): boolean {
-  return text.trim() === NO_ANSWER;
+  const t = text.trim();
+  return t === NO_ANSWER || t === UNHEARD;
+}
+
+export function isUnheard(text: string): boolean {
+  return text.trim() === UNHEARD;
+}
+
+export function isPartialCapture(text: string): boolean {
+  return text.includes(PARTIAL_MARK);
+}
+
+export function stripCaptureMarks(text: string): string {
+  return text.split(PARTIAL_MARK).join(" ").replace(/\s{2,}/g, " ").trim();
 }
 
 export function deriveProgress(history: HistoryEntry[]): Progress {

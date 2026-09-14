@@ -1,3 +1,4 @@
+import { NO_ANSWER, PARTIAL_MARK, UNHEARD } from "@/lib/llm/parse";
 import type { SttTraceEvent } from "@/lib/types";
 
 // Pure reducer for the SpeechRecognition wrapper. Chrome's recognizer
@@ -10,6 +11,10 @@ export interface SttState {
   phase: "idle" | "listening" | "failed" | "stopped";
   /** Finalized transcript segments, accumulated ACROSS engine auto-restarts. */
   finalSegments: string[];
+  /** When each final segment's speech ENDED (parallel to finalSegments). A
+   * batch transcriber answers out of order — a retried segment lands after
+   * the ones spoken later — and the transcript must follow the speech. */
+  finalEnds: number[];
   interim: string;
   /** Silence-timer anchor: last speech-bearing result — OR the restart moment,
    * so an engine-restart gap is never counted as user silence. */
@@ -26,6 +31,12 @@ export interface SttState {
   consecutiveEngineErrors: number;
   failReason: string | null;
   trace: SttTraceEvent[];
+  /** Segments sent to a transcriber and not yet answered (batch engines). */
+  pending: number;
+  /** Segments with speech energy whose transcription failed even after a retry. */
+  lostSegments: number;
+  /** Segments with speech energy that came back with no words. */
+  emptySegments: number;
 }
 
 export type SttAction =
@@ -36,6 +47,8 @@ export type SttAction =
   | { type: "SPEECH_ACTIVITY"; t: number }
   | { type: "ENGINE_END"; t: number } // recognizer stopped on its own
   | { type: "ERROR"; t: number; error: string }
+  | { type: "SEGMENT_SENT"; t: number }
+  | { type: "SEGMENT_SETTLED"; t: number; outcome: "ok" | "empty" | "lost" }
   | { type: "STOP"; t: number }; // we intentionally stopped (answer ended)
 
 export type SttEffect = { kind: "restart" } | { kind: "degrade_to_text"; reason: string } | null;
@@ -58,6 +71,7 @@ export function initialSttState(): SttState {
   return {
     phase: "idle",
     finalSegments: [],
+    finalEnds: [],
     interim: "",
     lastSpeechT: null,
     restartCount: 0,
@@ -66,7 +80,36 @@ export function initialSttState(): SttState {
     consecutiveEngineErrors: 0,
     failReason: null,
     trace: [],
+    pending: 0,
+    lostSegments: 0,
+    emptySegments: 0,
   };
+}
+
+export interface CaptureOutcome {
+  /** Speech energy was detected at some point in the answer. */
+  heard: boolean;
+  lost: number;
+  empty: number;
+}
+
+export function captureOutcome(s: SttState): CaptureOutcome {
+  return { heard: s.lastSpeechT !== null, lost: s.lostSegments, empty: s.emptySegments };
+}
+
+/** What goes into the transcript for this answer. The distinction the
+ * interviewer needs: nothing was said (silence) vs the candidate spoke and the
+ * recogniser produced nothing (unheard) vs part of what they said was lost.
+ * A recogniser failure used to be recorded as "(no answer)" and re-asked as if
+ * the candidate had stayed silent. */
+export function answerTextFor(transcript: string, capture?: CaptureOutcome): string {
+  const clean = transcript.replace(/\s+/g, " ").trim();
+  if (!clean) {
+    if (capture && capture.heard && capture.lost + capture.empty > 0) return UNHEARD;
+    return NO_ANSWER;
+  }
+  if (capture && capture.lost > 0) return `${clean} ${PARTIAL_MARK}`;
+  return clean;
 }
 
 export function fullTranscript(s: SttState): string {
@@ -100,15 +143,25 @@ function isRevisionOf(next: string, prev: string): boolean {
   return long.startsWith(short + " ");
 }
 
-/** Append a final segment, merging it into the previous one when it is a
- * revision of it (keeping the longer, better-punctuated wording). */
-function appendFinal(segments: string[], text: string): string[] {
-  const last = segments[segments.length - 1];
-  if (last && isRevisionOf(text, last)) {
-    const keep = dedupeKey(text).length >= dedupeKey(last).length ? text : last;
-    return [...segments.slice(0, -1), keep];
+/** Place a final segment by the time its speech ended, merging it into the
+ * segment before it when it is a revision of that one (keeping the longer,
+ * better-punctuated wording). Chrome's recogniser reports in order, so this is
+ * a plain append there; a batch transcriber's late (retried) segment is put
+ * back where it was spoken — a live run recorded "…only one order can exist
+ * per listing. The hardest part was…" because the first half of the answer
+ * came back after the second. */
+function placeFinal(s: SttState, text: string, t: number): void {
+  let idx = s.finalEnds.length;
+  while (idx > 0 && s.finalEnds[idx - 1] > t) idx--;
+  const prev = s.finalSegments[idx - 1];
+  if (prev !== undefined && isRevisionOf(text, prev)) {
+    const keep = dedupeKey(text).length >= dedupeKey(prev).length ? text : prev;
+    s.finalSegments = [...s.finalSegments.slice(0, idx - 1), keep, ...s.finalSegments.slice(idx)];
+    s.finalEnds = [...s.finalEnds.slice(0, idx - 1), Math.max(s.finalEnds[idx - 1], t), ...s.finalEnds.slice(idx)];
+    return;
   }
-  return [...segments, text];
+  s.finalSegments = [...s.finalSegments.slice(0, idx), text, ...s.finalSegments.slice(idx)];
+  s.finalEnds = [...s.finalEnds.slice(0, idx), t, ...s.finalEnds.slice(idx)];
 }
 
 export function sttReduce(state: SttState, action: SttAction): { state: SttState; effect: SttEffect } {
@@ -131,7 +184,7 @@ export function sttReduce(state: SttState, action: SttAction): { state: SttState
         const text = action.text.trim();
         if (text) {
           s.trace.push({ kind: "result", t: action.t, text: action.text, isFinal: true });
-          s.finalSegments = appendFinal(s.finalSegments, text);
+          placeFinal(s, text, action.t);
         }
         return { state: s, effect: null };
       }
@@ -142,7 +195,7 @@ export function sttReduce(state: SttState, action: SttAction): { state: SttState
         // Same merge as the stopped phase: an engine restart can re-deliver the
         // interim that ENGINE_END already promoted, and a segmenter's padded
         // boundaries can re-transcribe words the previous segment ended on.
-        if (text) s.finalSegments = appendFinal(s.finalSegments, text);
+        if (text) placeFinal(s, text, action.t);
         s.interim = "";
       } else {
         s.interim = action.text;
@@ -174,7 +227,7 @@ export function sttReduce(state: SttState, action: SttAction): { state: SttState
       // Chrome sometimes ends without finalizing the last hypothesis.
       if (s.phase !== "listening") return { state: s, effect: null };
       if (s.interim.trim()) {
-        s.finalSegments = [...s.finalSegments, s.interim.trim()];
+        placeFinal(s, s.interim.trim(), action.t);
         s.interim = "";
       }
       if (s.restartCount >= MAX_RESTARTS) {
@@ -191,10 +244,27 @@ export function sttReduce(state: SttState, action: SttAction): { state: SttState
       return { state: s, effect: { kind: "restart" } };
     }
 
+    case "SEGMENT_SENT": {
+      s.pending += 1;
+      return { state: s, effect: null };
+    }
+    case "SEGMENT_SETTLED": {
+      s.pending = Math.max(0, s.pending - 1);
+      if (action.outcome === "lost") s.lostSegments += 1;
+      else if (action.outcome === "empty") s.emptySegments += 1;
+      return { state: s, effect: null };
+    }
     case "ERROR": {
       s.trace.push({ kind: "error", t: action.t, error: action.error });
       if (s.phase !== "listening") return { state: s, effect: null };
       if (FATAL_ERRORS.has(action.error)) {
+        s.phase = "failed";
+        s.failReason = action.error;
+        return { state: s, effect: { kind: "degrade_to_text", reason: action.error } };
+      }
+      // A rate-limited cloud recogniser stays limited for the rest of the
+      // minute: hand over to the next engine now, with what was heard so far.
+      if (action.error === "cloud_rate_limited") {
         s.phase = "failed";
         s.failReason = action.error;
         return { state: s, effect: { kind: "degrade_to_text", reason: action.error } };
@@ -231,7 +301,7 @@ export function sttReduce(state: SttState, action: SttAction): { state: SttState
     case "STOP": {
       s.trace.push({ kind: "stop", t: action.t });
       if (s.interim.trim()) {
-        s.finalSegments = [...s.finalSegments, s.interim.trim()];
+        placeFinal(s, s.interim.trim(), action.t);
         s.interim = "";
       }
       s.phase = "stopped";

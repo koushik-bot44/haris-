@@ -18,11 +18,14 @@ async function transcribeViaServer(audio16k: Float32Array, signal: AbortSignal):
   let res: Response;
   try {
     res = await fetch("/api/stt", { method: "POST", body: form, signal });
-  } catch (err) {
-    if (signal.aborted) return "";
-    throw new Error("network");
+  } catch {
+    // The session ending mid-request is the only abort that means "drop it";
+    // a per-segment deadline is a failure the caller retries.
+    if (signal.aborted && (signal.reason as { name?: string } | undefined)?.name !== "TimeoutError") return "";
+    throw new Error(signal.aborted ? "timeout" : "network");
   }
   if (res.status === 404) throw new Error("stt_disabled");
+  if (res.status === 429) throw new Error("rate_limited");
   if (!res.ok) throw new Error(`stt_${res.status}`);
   const d = (await res.json()) as { text?: string };
   return typeof d.text === "string" ? d.text : "";
@@ -32,5 +35,5 @@ export function startCloudStt(callbacks: {
   onUpdate: (state: SttState) => void;
   onDegrade: (reason: string) => void;
 }): SttSession {
-  return startSegmentedStt(transcribeViaServer, callbacks, { settleMs: 2500, errorCode: "cloud_transcribe" });
+  return startSegmentedStt(transcribeViaServer, callbacks, { settleMs: 3000, errorCode: "cloud_transcribe" });
 }

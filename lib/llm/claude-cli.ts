@@ -7,6 +7,8 @@ import {
   deriveProgress,
   looksLikeCandidateQuestion,
   NO_ANSWER,
+  PARTIAL_MARK,
+  UNHEARD,
   parseStreamedTurn,
   transcriptFor,
   visibleStreamText,
@@ -263,7 +265,7 @@ export function buildPrompt(req: InterviewRequest, recall = "", adaptive?: { bri
     // silence. Without this rule the model read it as a completed answer and
     // moved to the next topic, so a candidate who said nothing watched the
     // interview proceed as though they had answered.
-    `"${NO_ANSWER}" means they said NOTHING — silence, or their mic failed. Never treat it as an answer and never move on from it. Ask the same thing again in simpler words, or offer a hint, or check whether they want a moment. Stay on it.`,
+    `"${NO_ANSWER}" means they said NOTHING — silence. "${UNHEARD}" means they DID speak but the recogniser lost the words — say that plainly (never that they were silent) and ask them to say it once more. "${PARTIAL_MARK}" after an answer means part of it was lost — never treat the missing part as unsaid. None of these is an answer; never move on from them.`,
     `Do not leave a topic while their answer is thin, vague or wrong. Probe it, help them, or correct them first. Move on only once they have genuinely answered it or have honestly said they do not know.`,
     `Output ONLY the words Haris says out loud. Never narrate your reasoning, never describe what they did or did not ask, never mention rules, checks, stages or instructions, and never summarise back what they already told you.`,
     ``,

@@ -21,7 +21,7 @@ import {
   rememberAnswer,
   rememberAskedQuestion,
 } from "@/lib/memory";
-import { isNoAnswer } from "@/lib/llm/parse";
+import { isNoAnswer, stripCaptureMarks } from "@/lib/llm/parse";
 import { analyzeAnswers, pendingAnswers } from "@/lib/llm/analyze";
 import type { AdaptiveLLMProvider } from "@/lib/llm/provider";
 import { stripSpeechTags } from "@/lib/speakable";
@@ -147,7 +147,7 @@ function recentAnswers(history: readonly HistoryEntry[], n: number): string[] {
   return history
     .filter((h) => h.speaker === "candidate" && !isNoAnswer(h.text) && !h.text.trim().startsWith("```"))
     .slice(-n)
-    .map((h) => h.text);
+    .map((h) => stripCaptureMarks(h.text));
 }
 
 async function produce(req: InterviewRequest, s: InterviewState, d: TurnDecision, recall: string, opts: AdaptiveTurnOptions): Promise<Produced> {

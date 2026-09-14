@@ -65,7 +65,7 @@ export interface AnswerSignals {
   question: boolean;
 }
 
-export type AnswerFlag = "overclaim" | "hedged" | "asked-question" | "code" | "off-topic";
+export type AnswerFlag = "overclaim" | "hedged" | "asked-question" | "code" | "off-topic" | "partial";
 
 export interface AnswerAnalysis {
   /** History index of the candidate entry. */

@@ -48,6 +48,11 @@ export async function POST(req: Request) {
   } catch (err) {
     const aborted = err instanceof Error && err.name === "AbortError";
     if (!aborted) console.warn("[stt] transcription failed:", err instanceof Error ? err.message : err);
+    // A provider rate limit is told apart from an outage: the room switches to
+    // an unmetered engine for the rest of the session instead of retrying into
+    // the same dead minute (Groq Whisper: 20 requests/minute per org).
+    const limited = /_429\b/.test(err instanceof Error ? err.message : "");
+    if (limited) return NextResponse.json({ error: "stt_rate_limited" }, { status: 429 });
     return NextResponse.json({ error: aborted ? "stt_timeout" : "stt_error" }, { status: 502 });
   }
 }

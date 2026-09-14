@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CaptureBuffer, downsample, looksLikeHallucination, STT_TARGET_RATE } from "@/lib/stt-segmented";
+import { CaptureBuffer, downsample, looksLikeHallucination, STT_TARGET_RATE, transcribeWithRetry } from "@/lib/stt-segmented";
 
 // The VAD names segment boundaries in wall-clock time; the audio is a sample
 // buffer filled by a main-thread ScriptProcessor. Everything here is about the
@@ -132,5 +132,49 @@ describe("segment hygiene", () => {
     expect(looksLikeHallucination("[BLANK_AUDIO]")).toBe(true);
     expect(looksLikeHallucination("")).toBe(true);
     expect(looksLikeHallucination("Thanks for the question, my project was")).toBe(false);
+  });
+});
+
+describe("transcribeWithRetry: a failed segment is retried, then reported, never dropped", () => {
+  const audio = new Float32Array(16_000);
+  const never = new AbortController().signal;
+
+  it("retries once after a failure and returns the words", async () => {
+    let calls = 0;
+    const flaky = async () => {
+      calls++;
+      if (calls === 1) throw new Error("stt_500");
+      return "I built the backend myself";
+    };
+    const r = await transcribeWithRetry(flaky, audio, never, { retryDelayMs: 1 });
+    expect(r).toEqual({ outcome: "ok", text: "I built the backend myself" });
+    expect(calls).toBe(2);
+  });
+
+  it("reports a segment as lost after the retry also fails", async () => {
+    const dead = async () => {
+      throw new Error("stt_502");
+    };
+    expect(await transcribeWithRetry(dead, audio, never, { retryDelayMs: 1 })).toEqual({ outcome: "lost", error: "transcribe_failed" });
+  });
+
+  it("gives up on a hung request at the deadline and marks it a timeout", async () => {
+    const hung = (_a: Float32Array, signal: AbortSignal) =>
+      new Promise<string>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("timeout")));
+      });
+    const r = await transcribeWithRetry(hung, audio, never, { timeoutMs: 30, retryDelayMs: 1 });
+    expect(r).toEqual({ outcome: "lost", error: "timeout" });
+  });
+
+  it("an empty transcription is 'empty', not an error and not words", async () => {
+    expect(await transcribeWithRetry(async () => "   ", audio, never)).toEqual({ outcome: "empty" });
+    expect(await transcribeWithRetry(async () => "[BLANK_AUDIO]", audio, never)).toEqual({ outcome: "empty" });
+  });
+
+  it("stops quietly when the session itself is aborted", async () => {
+    const ac = new AbortController();
+    ac.abort();
+    expect(await transcribeWithRetry(async () => "words", audio, ac.signal)).toEqual({ outcome: "aborted" });
   });
 });
