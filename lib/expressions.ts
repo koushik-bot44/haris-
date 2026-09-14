@@ -18,7 +18,8 @@ import { stripSpeechTags } from "@/lib/speakable";
 //
 //   "Hmm" (two m's or more) → hˈəm     ✓ a real hum
 //   "Uh-huh" → ʌhʌ, "Uh"/"Um" → ʌ/ʌm  ✓
-//   "Oh", "Ah", "Huh", "Ha!", "haha", "heh-heh", "Well…", "So…" ✓ real phonemes
+//   "Oh", "Ah", "Huh", "Ha!", "haha", "Well…", "So…" ✓ real phonemes
+//   "heh-heh" ✗ dropped — Kokoro renders it, but a recogniser hears "head-head"
 //   every full phrase ("Okay, that makes sense.", "Wait, really?") ✓
 //
 // Two more measured facts shape how expressions are used:
@@ -65,7 +66,7 @@ const LIBRARY: Record<ReactionContext, Expression[]> = {
   difficult: [{ text: "Hmm." }, { text: "Okay, let's take that one step further." }, { text: "Alright, let's take that one step further." }, { text: "Hmm... let me push on that a bit." }],
   clarify: [{ text: "Just to clarify..." }, { text: "Let me understand that correctly..." }, { text: "So, you're saying...?" }, { text: "Okay, let me make sure I have that right." }],
   deeper: [{ text: "Okay, let's dig into that." }, { text: "Interesting — tell me more about that." }, { text: "Alright, let's take that one step further." }, { text: "Okay, let's go one level down." }],
-  amused: [{ text: "Ha!", chatterbox: "[laugh] Ha!" }, { text: "haha, fair enough.", chatterbox: "[chuckle] Fair enough." }, { text: "heh-heh, okay.", chatterbox: "[chuckle] Okay." }, { text: "That's funny." }],
+  amused: [{ text: "Ha!", chatterbox: "[laugh] Ha!" }, { text: "haha, fair enough.", chatterbox: "[chuckle] Fair enough." }, { text: "That's funny." }],
   honest: [{ text: "That's fine — it's useful to know where the edge is." }, { text: "No problem, that's an honest answer." }, { text: "Okay, thanks for being straight about it." }, { text: "Fair enough, that's honest." }],
 };
 
