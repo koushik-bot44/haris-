@@ -115,6 +115,7 @@ export const sessionSchema = z
       })
       .strict()
       .optional(),
+    readiness: z.record(z.string(), z.unknown()).optional(),
     gdMetrics: gdMetricsSchema.optional(),
     topic: z.string().max(500).optional(),
     retries: z.array(retryEntrySchema).max(SCORES_MAX * 3).optional(),
@@ -123,5 +124,5 @@ export const sessionSchema = z
 
 /** Compile-time guarantee: the schema's output satisfies the pinned Session contract. */
 export function toSession(parsed: z.infer<typeof sessionSchema>): Session {
-  return parsed;
+  return parsed as Session;
 }

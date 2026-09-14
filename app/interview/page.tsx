@@ -15,6 +15,8 @@ import { sttCapabilities } from "@/lib/stt";
 import { micHelp } from "@/lib/mic-help";
 import { codingQuestionFor, type CodingQuestion } from "@/lib/fixtures/technical-questions";
 import type { CodeLanguage, RolePreset } from "@/lib/types";
+import { ReadinessReportCard } from "@/components/report/ReadinessReport";
+import type { InterviewView } from "@/lib/interview/types";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
@@ -146,7 +148,9 @@ function InterviewRoom() {
       {/* Minimal room chrome — the global header stays out of the room. */}
       <header className="room-bar">
         <div className="room-bar-meta mono-num">
-          {inQuestions ? (
+          {m.view && live ? (
+            <CoverageStrip view={m.view} coding={m.codingTurn} />
+          ) : inQuestions ? (
             <>
               <span className="qmeter" aria-hidden>
                 {[1, 2, 3, 4, 5].map((n) => (
@@ -565,6 +569,24 @@ function Live({
   );
 }
 
+/** Quiet progress toward coverage: one bar per competency the plan must assess. */
+function CoverageStrip({ view, coding }: { view: InterviewView; coding: boolean }) {
+  const current = view.competencies.find((c) => c.id === view.current);
+  return (
+    <span className="coverage-strip" role="img" aria-label={`Interview coverage ${Math.round(view.progress * 100)} percent`}>
+      {view.competencies.map((c) => (
+        <span key={c.id} title={`${c.label}: ${c.status.replace("-", " ")}`} className={`cov ${c.status}${c.id === view.current ? " now" : ""}`}>
+          <i style={{ width: `${Math.round(Math.min(1, c.coverage / 0.6) * 100)}%` }} />
+        </span>
+      ))}
+      <span className="small">
+        {current ? current.label : "Coverage"}
+        {coding ? " · coding" : ""}
+      </span>
+    </span>
+  );
+}
+
 function Summary({ m }: { m: M }) {
   const s = m.session;
   if (!s) return null;
@@ -587,6 +609,8 @@ function Summary({ m }: { m: M }) {
 
       {/* FIRST: the verdict — score + coach summary. ScoreVerdict raises its
           own card; wrapping it in another one double-stacks the chrome. */}
+      {s.readiness && <ReadinessReportCard report={s.readiness} />}
+
       <ScoreVerdict entries={entries} summary={s.overall.summary} scoring={s.scoring} />
 
       {!m.sessionPersisted && (

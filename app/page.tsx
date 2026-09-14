@@ -70,6 +70,7 @@ export default function SetupPage() {
   // normal path in. Found by looking at a screenshot of this page.
   const [bargeIn, setBargeIn] = useState(true);
   const [resume, setResume] = useState("");
+  const [jobDescription, setJobDescription] = useState("");
   const [analysis, setAnalysis] = useState<{
     strengths: string[];
     gaps: string[];
@@ -209,6 +210,8 @@ export default function SetupPage() {
         window.sessionStorage.removeItem("pds_resume");
         window.sessionStorage.removeItem("pds_resume_profile");
       }
+      if (jobDescription.trim()) window.sessionStorage.setItem("pds_job_description", jobDescription.trim().slice(0, 4000));
+      else window.sessionStorage.removeItem("pds_job_description");
       window.sessionStorage.setItem("pds_code_lang", codeLang);
       window.sessionStorage.setItem("pds_barge_in", bargeIn ? "1" : "0");
     } catch {}
@@ -375,6 +378,24 @@ export default function SetupPage() {
                 )}
               </div>
             </details>
+
+            {round !== "gd" && (
+              <details className="disclosure">
+                <summary>Add a job description (optional — the interview plan targets what it asks for)</summary>
+                <div className="disclosure-body">
+                  <div className="field">
+                    <textarea
+                      rows={5}
+                      value={jobDescription}
+                      maxLength={4000}
+                      onChange={(e) => setJobDescription(e.target.value)}
+                      placeholder="Paste the job description, or just the skills it lists."
+                    />
+                    <span className="hint">Used only to decide which skills this interview must cover.</span>
+                  </div>
+                </div>
+              </details>
+            )}
 
             {round !== "gd" && (
               <label className="card tinted toggle-card">

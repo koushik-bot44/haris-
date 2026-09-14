@@ -1,6 +1,6 @@
 import type { InterviewRequest, InterviewerTurn } from "@/lib/types";
 import { computeNextTurn } from "@/lib/llm/interview-flow";
-import { ProviderError, type LLMProvider } from "@/lib/llm/provider";
+import { ProviderError, type AdaptiveLLMProvider } from "@/lib/llm/provider";
 
 // Mock provider — the scripted question bank behind a realistic-feeling
 // delay. It is the zero-config brain AND the rescue every other provider
@@ -21,8 +21,13 @@ function simulatedLatencyMs(): number {
   return 250 + ((callCounter * 137) % 400);
 }
 
-export const mockProvider: LLMProvider = {
+export const mockProvider: AdaptiveLLMProvider = {
   name: "mock",
+  /** No language model: the adaptive engine's deterministic interviewer speaks. */
+  adaptive: true,
+  async generate(): Promise<null> {
+    return null;
+  },
   async nextTurn(req: InterviewRequest): Promise<InterviewerTurn> {
     callCounter++;
     await new Promise((r) => setTimeout(r, simulatedLatencyMs()));

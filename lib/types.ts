@@ -1,3 +1,5 @@
+import type { ReadinessReport } from "@/lib/interview/types";
+
 // Core contracts — pinned in the approved plan. Changing a shape here changes
 // the scorecard, the reporting views, and the metrics pipeline with it.
 
@@ -63,6 +65,8 @@ export interface Session {
   overall: { avgScore: number | null; summary: string };
   /** Optional so stored v1 payloads keep parsing. */
   scoring?: SessionScoring;
+  /** Adaptive rounds: the readiness report the server computed from verified state. */
+  readiness?: ReadinessReport;
   /** GD sessions only. Optional so stored v1 payloads keep parsing. */
   gdMetrics?: GdMetrics;
   /** GD sessions: the discussion topic. */
@@ -182,6 +186,10 @@ export interface InterviewRequest {
   profile?: ResumeProfile;
   /** Candidate's chosen coding-round language (technical round). */
   codeLanguage?: CodeLanguage;
+  /** Optional job description — re-weights the interview plan. */
+  jobDescription?: string;
+  /** Signed interview state from the previous turn (lib/interview/token.ts). */
+  state?: string;
   history: HistoryEntry[];
 }
 

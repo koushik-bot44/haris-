@@ -32,6 +32,8 @@ export const interviewRequestSchema = z.object({
   resume: z.string().max(RESUME_MAX_CHARS).transform(sanitizeResume).optional(),
   profile: resumeProfileSchema.optional(),
   codeLanguage: z.enum(["java", "python", "cpp", "javascript", "c"]).optional(),
+  jobDescription: z.string().max(4000).optional(),
+  state: z.string().max(200_000).optional(),
   history: z
     .array(
       z.object({

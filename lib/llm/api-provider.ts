@@ -19,6 +19,8 @@ import {
   wasAlreadyAsked,
 } from "@/lib/memory";
 import { chatComplete, chatConfig, isReasoningModel } from "@/lib/llm/chat";
+import { ProviderError, type AdaptiveLLMProvider, type GeneratedTurn, type GenerateInput } from "@/lib/llm/provider";
+import { ctrlNote, MOVE_PREFIX, splitMoveLine } from "@/lib/interview/moveline";
 
 // The production interviewer brain for EVERY cloud backend — Groq, OpenAI,
 // Gemini, OpenRouter, or a self-hosted OpenAI-compatible server. Same prompt,
@@ -73,6 +75,25 @@ export const apiProvider = {
   /** Reports the backend that is actually configured ("groq", "openai", …). */
   get name(): string {
     return chatConfig()?.backend ?? "api";
+  },
+  adaptive: true as const,
+  /** Words for a turn the adaptive engine has already planned (lib/interview/orchestrator.ts). */
+  async generate(input: GenerateInput): Promise<GeneratedTurn | null> {
+    const cfg = chatConfig();
+    if (!cfg) return null;
+    const { req } = input;
+    const first = req.candidateName.trim().split(/\s+/)[0] || "there";
+    const opening = input.kind === "open" ? `\n${OPENING_NOTE}\nTheir first name is "${first}" — open with it.` : "";
+    const forced = input.forcedMove
+      ? `\nYOUR MOVE HAS BEEN DECIDED: ${JSON.stringify(input.forcedMove)}. Execute exactly that move in your own words. No ${MOVE_PREFIX} line.`
+      : "";
+    const prompt = `${buildPrompt(req, input.recall, { brief: input.brief, objective: input.objective })}${opening}${forced}`;
+    const maxTokens = (isReasoningModel(cfg.model) ? TURN_MAX_TOKENS * 2 : TURN_MAX_TOKENS) + 60;
+    const raw = await chatComplete(prompt, { signal: input.signal, maxTokens, timeoutMs: TURN_TIMEOUT_MS, temperature: input.kind === "open" ? 0.9 : 0.7 }, cfg);
+    const { move, rest } = splitMoveLine(raw);
+    const parsed = parseStreamedTurn(rest);
+    if (!parsed) throw new ProviderError("the model reply had no usable spoken text", "malformed");
+    return { text: parsed.text, move, note: ctrlNote(rest), done: parsed.done };
   },
   async nextTurn(req: InterviewRequest, opts?: NextTurnOpts): Promise<InterviewerTurn> {
     const o: NextTurnOpts = opts instanceof AbortSignal ? { signal: opts } : (opts ?? {});
@@ -259,4 +280,4 @@ export const apiProvider = {
       return scripted(`${cfg.backend} call failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   },
-} satisfies LLMProvider;
+} satisfies AdaptiveLLMProvider;

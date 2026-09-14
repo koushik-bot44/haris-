@@ -69,10 +69,14 @@ export const COMPANY_BRIEFS: Record<RolePreset, CompanyBrief> = {
   },
 };
 
+export function companyBriefFor(role: RolePreset | string): CompanyBrief {
+  return COMPANY_BRIEFS[role as RolePreset] ?? COMPANY_BRIEFS.general;
+}
+
 /** The prompt block. Compact on purpose — see the token note above. Anything
  * added here is paid on every turn of every interview. */
 export function companyBriefBlock(role: RolePreset): string {
-  const b = COMPANY_BRIEFS[role] ?? COMPANY_BRIEFS.general;
+  const b = companyBriefFor(role);
   return (
     `THE JOB (yours to give — answer specifically when asked, volunteer a piece when it fits, invent nothing beyond it; ` +
     `if asked something not here, say you would have to check). ${b.company}. Team: ${b.team}, shipping ${b.ships}. ` +

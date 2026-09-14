@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getProvider } from "@/lib/llm";
-import { ProviderError } from "@/lib/llm/provider";
+import { isAdaptive, ProviderError } from "@/lib/llm/provider";
+import { runAdaptiveTurn } from "@/lib/interview/orchestrator";
 import { interviewRequestSchema } from "@/lib/interview-schema";
 import { auth } from "@/lib/auth";
 import { guestCookieHeader, memorySubjectFor, newGuestId, readGuestId } from "@/lib/memory";
@@ -113,6 +114,63 @@ export async function POST(req: Request) {
     const res = NextResponse.json({ turn: null, provider: provider.name, skipped: "metered_backend" });
     if (setCookie) res.headers.append("set-cookie", setCookie);
     return res;
+  }
+
+  // The adaptive engine: the application plans the turn from signed state and
+  // validates the model's proposed move before a word is spoken. Providers that
+  // do not implement generate() keep the original whole-turn contract below.
+  if (isAdaptive(provider)) {
+    const run = () => runAdaptiveTurn(parsed.data, { provider, signal: req.signal, memoryKey: turnOpts.memoryKey, speculative, now: Date.now() });
+    const envelope = (out: Awaited<ReturnType<typeof run>>) => ({
+      turn: out.turn,
+      provider: provider.name,
+      state: out.state,
+      view: out.view,
+      ...(out.report ? { report: out.report } : {}),
+    });
+    if ((body as { stream?: unknown }).stream === true) {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const send = (obj: unknown) => {
+            try {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+            } catch {}
+          };
+          try {
+            const out = await run();
+            send({ kind: "text", text: out.turn.text });
+            send({ kind: "turn", ...envelope(out) });
+          } catch (err) {
+            console.warn("[interview] adaptive turn failed:", err instanceof Error ? err.message : err);
+            send({ kind: "error", error: "interviewer_unavailable", kind2: err instanceof ProviderError ? err.kind : "unavailable" });
+          } finally {
+            try {
+              controller.close();
+            } catch {}
+          }
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache, no-transform",
+          connection: "keep-alive",
+          ...(setCookie ? { "set-cookie": setCookie } : {}),
+        },
+      });
+    }
+    try {
+      const res = NextResponse.json(envelope(await run()));
+      if (setCookie) res.headers.append("set-cookie", setCookie);
+      return res;
+    } catch (err) {
+      console.warn("[interview] adaptive turn failed:", err instanceof Error ? err.message : err);
+      return NextResponse.json(
+        { error: "interviewer_unavailable", kind: "unavailable", message: "The interviewer lost connection. You can continue to the next question." },
+        { status: 503 },
+      );
+    }
   }
 
   if ((body as { stream?: unknown }).stream === true) {

@@ -56,6 +56,20 @@ import { voiceForRound } from "@/lib/voices";
 import { codingQuestionFor, codingSeedFrom, TECH_PERSONA, type CodingQuestion } from "@/lib/fixtures/technical-questions";
 import { setVizMode, startMicViz, stopMicViz } from "@/lib/audio-viz";
 import { NO_ANSWER } from "@/lib/llm/parse";
+import type { InterviewView, ReadinessReport } from "@/lib/interview/types";
+
+/** What an adaptive turn carries besides the turn itself. */
+interface TurnMeta {
+  state?: string;
+  view?: InterviewView;
+  report?: ReadinessReport;
+}
+
+interface InterviewExtras {
+  profile?: ResumeProfile;
+  codeLanguage?: CodeLanguage;
+  jobDescription?: string;
+}
 
 export interface Persona {
   name: string;
@@ -68,9 +82,13 @@ const HR_PERSONA: Persona = { name: "Haris", title: "AI interviewer · HR round"
 /** Setup-page extras (pinned sessionStorage keys) read ONCE at hook init and
  * sent on EVERY /api/interview body — live, speculative, and opening — so the
  * interviewer brain knows the candidate. Any parse failure means absent. */
-function readInterviewExtras(): { profile?: ResumeProfile; codeLanguage?: CodeLanguage } {
+function readInterviewExtras(): InterviewExtras {
   if (typeof window === "undefined") return {};
-  const extras: { profile?: ResumeProfile; codeLanguage?: CodeLanguage } = {};
+  const extras: InterviewExtras = {};
+  try {
+    const jd = window.sessionStorage.getItem("pds_job_description");
+    if (jd?.trim()) extras.jobDescription = jd.trim().slice(0, 4000);
+  } catch {}
   try {
     const raw = window.sessionStorage.getItem("pds_resume_profile");
     if (raw) extras.profile = JSON.parse(raw) as ResumeProfile;
@@ -162,6 +180,8 @@ interface PrefetchedTurn {
   turnPromise: Promise<InterviewerTurn | null>;
   /** Set once the turn resolves: ahead-of-time fetched + decoded audio. */
   prepared: PreparedSpeech | null;
+  /** State, view and report that came with the turn — adopted only if the turn is used. */
+  meta: TurnMeta | null;
   cancelled: boolean;
   cancel(): void;
 }
@@ -197,6 +217,8 @@ export interface InterviewMachine {
   lastSentence: string; // low-emphasis proof-of-hearing (live transcript stays hidden)
   hearing: boolean;
   questionIndex: number;
+  /** Live coverage of the interview plan (adaptive rounds). */
+  view: InterviewView | null;
   turnCount: number;
   latencies: number[];
   /** Parallel to latencies: true when that turn's TTS fell back off the
@@ -304,7 +326,17 @@ export function useInterviewMachine(
   /** In-flight streaming interviewer fetch — cleanup aborts the SSE reader. */
   const streamAbortRef = useRef<AbortController | null>(null);
   /** Setup-page extras, read once (identical on every request this session). */
-  const extrasRef = useRef<{ profile?: ResumeProfile; codeLanguage?: CodeLanguage } | null>(null);
+  const extrasRef = useRef<InterviewExtras | null>(null);
+  /** Signed adaptive-interview state from the last turn actually used — sent back on every request. */
+  const stateTokenRef = useRef<string | null>(null);
+  const reportRef = useRef<ReadinessReport | null>(null);
+  const [view, setView] = useState<InterviewView | null>(null);
+  const adoptMeta = (d: TurnMeta | null | undefined) => {
+    if (!d) return;
+    if (typeof d.state === "string") stateTokenRef.current = d.state;
+    if (d.view) setView(d.view);
+    if (d.report) reportRef.current = d.report;
+  };
   if (extrasRef.current === null) extrasRef.current = readInterviewExtras();
   /** Barge-in as the long-lived callbacks see it (deliverTurn is memoized). */
   const bargeInRef = useRef(bargeIn);
@@ -508,6 +540,8 @@ export function useInterviewMachine(
         // bargeIn is a client-only preference — never sent to the interviewer.
         ...(extrasRef.current?.profile ? { profile: extrasRef.current.profile } : {}),
         ...(extrasRef.current?.codeLanguage ? { codeLanguage: extrasRef.current.codeLanguage } : {}),
+        ...(extrasRef.current?.jobDescription ? { jobDescription: extrasRef.current.jobDescription } : {}),
+        ...(stateTokenRef.current ? { state: stateTokenRef.current } : {}),
         history,
         ...(stream ? { stream: true } : {}),
         // A pre-fetch against a partial answer: the server never commits it
@@ -530,6 +564,7 @@ export function useInterviewMachine(
         basisWords,
         turnPromise: Promise.resolve(null),
         prepared: null,
+        meta: null,
         cancelled: false,
         cancel() {
           spec.cancelled = true;
@@ -544,9 +579,10 @@ export function useInterviewMachine(
         body: requestBody(history, false, true),
         signal: abort.signal,
       })
-        .then((r) => (r.ok ? (r.json() as Promise<{ turn: InterviewerTurn }>) : null))
+        .then((r) => (r.ok ? (r.json() as Promise<{ turn: InterviewerTurn } & TurnMeta>) : null))
         .then((d) => {
           if (!d?.turn || spec.cancelled || endedRef.current) return null;
+          spec.meta = d;
           // Pre-synthesize ONLY the opening greeting (basisWords 0 = one request
           // during preroll). Mid-answer speculation must NOT pre-synthesize:
           // the single local Chatterbox server can't take several concurrent
@@ -691,6 +727,7 @@ export function useInterviewMachine(
       },
       overall: composeOverall(scoredEntries),
       scoring: scoringStatus(scoredEntries.length, tooShortRef.current.size, scoreFailuresRef.current),
+      ...(reportRef.current ? { readiness: reportRef.current } : {}),
     };
     const { persisted } = saveSession(s);
     setSessionPersisted(persisted);
@@ -1147,8 +1184,9 @@ export function useInterviewMachine(
       // A JSON response despite stream:true (proxy stripped it, older server)
       // is still a valid turn — use it instead of burning a second LLM call.
       if (res.headers.get("content-type")?.includes("application/json")) {
-        const data = (await res.json()) as { turn?: InterviewerTurn };
+        const data = (await res.json()) as { turn?: InterviewerTurn } & TurnMeta;
         if (!data?.turn) throw new Error("stream_bad_json");
+        adoptMeta(data);
         return { turn: data.turn, live: null };
       }
       const reader = res.body.getReader();
@@ -1168,6 +1206,7 @@ export function useInterviewMachine(
           if (ev.kind === "error") throw new Error(ev.error);
           if (ev.kind === "turn") {
             turn = ev.turn;
+            adoptMeta(ev);
             continue;
           }
           // Display-first: the reply TYPES OUT here while she still "thinks"
@@ -1243,8 +1282,9 @@ export function useInterviewMachine(
         }
         throw new Error(`api_${res.status}`);
       }
-      const data = (await res.json()) as { turn: InterviewerTurn };
+      const data = (await res.json()) as { turn: InterviewerTurn } & TurnMeta;
       turn = data.turn;
+      adoptMeta(data);
     } catch {
       // A retried turn must not record the outage + human reaction time as
       // interviewer latency — drop the anchor for this turn.
@@ -1296,6 +1336,7 @@ export function useInterviewMachine(
         return;
       }
       if (turn) {
+        adoptMeta(spec.meta);
         void deliverTurn(turn, spec.prepared, true);
         return;
       }
@@ -1508,6 +1549,7 @@ export function useInterviewMachine(
           return;
         }
         if (turn) {
+          adoptMeta(opening.meta);
           void deliverTurn(turn, opening.prepared, true);
           return;
         }
@@ -1538,6 +1580,7 @@ export function useInterviewMachine(
     lastSentence,
     hearing,
     questionIndex,
+    view,
     turnCount: turnsRef.current.length,
     latencies,
     fallbackFlags,

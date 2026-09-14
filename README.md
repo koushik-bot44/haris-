@@ -108,6 +108,15 @@ analysis, career guidance and the GD debate run on a separate background model
 
 - **HR & Technical interviews** (voice + text) — adaptive, resume-anchored,
   deep-dive questioning; the technical round includes a live coding editor.
+- **Adaptive interview engine** (`lib/interview/`) — the app owns the plan,
+  evidence, competency coverage, claims and scoring; the model writes the words
+  and proposes one move (follow up, clarify, challenge, probe a resume claim,
+  adjust difficulty, switch competency, test a contradiction, wrap), which the
+  server validates before anything is spoken. Progress is driven by evidence
+  coverage, contradictions are raised with the candidate's own quotes, state
+  travels as a signed token, and a model outage falls back to a deterministic
+  interviewer that makes the same adaptive moves. Rounds end with a readiness
+  verdict (READY / ALMOST READY / NEEDS PRACTICE / NOT READY).
 - **Group Discussion room** — three AI debater personas with distinct voices,
   a moderator, barge-in, and airtime scoring.
 - **AI resume analysis** — ATS readiness score, strengths, gaps, missing skills.
@@ -229,6 +238,7 @@ lib/tts-engines.ts   server voices: ElevenLabs / OpenAI / Deepgram / Groq / Gemi
 lib/stt*.ts          hearing: Deepgram live, Chrome, cloud transcription, on-device Whisper
 lib/voice-cast.ts    persona → voice on every engine
 lib/gd/              Group Discussion engine (personas, debate flow, airtime)
+lib/interview/       adaptive engine: plan, analysis, coverage, claims, moves, fallback, report, signed state
 lib/fixtures/        curated question banks (HR, DSA, coding in 5 languages)
 docs/                DEPLOYMENT.md, E2E_VERIFICATION.md, PRODUCTION_PLAN.md
 test/                vitest suites

@@ -20,6 +20,7 @@ import { DeliveryRow } from "@/components/report/DeliveryRow";
 import { QuestionCard } from "@/components/report/QuestionCard";
 import { TurnTimeline } from "@/components/report/TurnTimeline";
 import { GdMetricsPanel } from "@/components/report/GdMetricsPanel";
+import { ReadinessReportCard } from "@/components/report/ReadinessReport";
 import type { Session } from "@/lib/types";
 
 type LoadState =
@@ -115,6 +116,8 @@ export default function ReportPage() {
           </span>
         ) : null}
       </div>
+
+      {s.readiness && <ReadinessReportCard report={s.readiness} />}
 
       <ScoreVerdict
         entries={s.perQuestionScores}

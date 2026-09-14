@@ -1684,3 +1684,24 @@ blockquote {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* ——— adaptive interview: coverage strip (room bar) ——— */
+.coverage-strip { display: inline-flex; align-items: center; gap: 6px; }
+.coverage-strip .cov { position: relative; display: inline-block; width: 22px; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.coverage-strip .cov i { position: absolute; inset: 0 auto 0 0; background: var(--text); opacity: 0.55; }
+.coverage-strip .cov.covered i { opacity: 0.9; }
+.coverage-strip .cov.struggling i { opacity: 0.3; }
+.coverage-strip .cov.now { outline: 1px solid var(--text); outline-offset: 2px; }
+
+/* ——— readiness report ——— */
+.rr-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.rr-verdict { font-weight: 600; letter-spacing: 0.02em; }
+.rr-score { font-size: 2rem; font-weight: 600; }
+.rr-tone { margin: 8px 0 4px; font-weight: 500; }
+.rr-section { margin-top: 18px; }
+.rr-h { font-size: 0.95rem; margin: 0 0 6px; }
+.rr-list { margin: 0; padding-left: 18px; }
+.rr-list li { margin: 3px 0; }
+.rr-table td { vertical-align: top; padding: 6px 0; }
+.rr-quote { margin-top: 2px; }
+.rr-weak { margin-top: 2px; opacity: 0.8; }

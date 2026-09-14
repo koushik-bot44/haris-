@@ -1,3 +1,4 @@
+import type { InterviewView, ReadinessReport } from "@/lib/interview/types";
 import type { InterviewerTurn } from "@/lib/types";
 
 // Pure streaming-turn helpers: split spoken text from the @@CTRL control line
@@ -74,7 +75,7 @@ export function remainderAfter(text: string, spoken: string): string {
 
 export type StreamEvent =
   | { kind: "text"; text: string }
-  | { kind: "turn"; turn: InterviewerTurn; provider?: string }
+  | { kind: "turn"; turn: InterviewerTurn; provider?: string; state?: string; view?: InterviewView; report?: ReadinessReport }
   | { kind: "error"; error: string; kind2?: string };
 
 /** Parse complete `data: {json}\n\n` frames out of an accumulating buffer.
