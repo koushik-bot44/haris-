@@ -70,3 +70,30 @@ describe("background answer analysis", () => {
     expect(merged.modelAnalyzed).toContain(1);
   });
 });
+
+describe("model claims and contradictions are checked for plausibility", () => {
+  it("stores a model claim in the candidate's own first-person-stripped words", () => {
+    const { state, history } = setup();
+    const merged = mergeModelAnalysis(
+      state,
+      [{ index: 1, competencies: [], rubric: null, claims: [{ text: "Candidate designed the order service", area: "backend", kind: "ownership", polarity: 1, quote: "I designed the order service in Spring Boot" }], contradictions: [], incorrect: null }],
+      history,
+      NOW + 2000,
+    );
+    const claim = merged.claims.find((c) => c.source === "model");
+    expect(claim?.text).toBe("designed the order service in Spring Boot");
+    expect(claim?.text).not.toMatch(/candidate/i);
+  });
+
+  it("drops a model-reported contradiction that is not about the earlier claim", () => {
+    const { state, history } = setup();
+    const earlier = state.claims.find((c) => c.source !== "resume") ?? state.claims[0];
+    const merged = mergeModelAnalysis(
+      state,
+      [{ index: 1, competencies: [], rubric: null, claims: [], contradictions: [{ claimId: earlier.id, quote: "which cut latency from 900ms to 120ms", explanation: "different topic" }], incorrect: null }],
+      history,
+      NOW + 2000,
+    );
+    expect(merged.contradictions).toHaveLength(0);
+  });
+});

@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { validateMove } from "@/lib/interview/actions";
+import { alternativeMove, validateMove } from "@/lib/interview/actions";
+import { alreadyAnswered, isSameQuestion } from "@/lib/interview/dedupe";
+import { sanitizeForVoice, type VoiceEngineKind } from "@/lib/expressions";
 import { buildBrief, objectiveLine } from "@/lib/interview/brief";
 import { commit, decide, ingest, initState, mergeModelAnalysis, moveContext, viewOf } from "@/lib/interview/engine";
 import { fallbackText } from "@/lib/interview/fallback";
 import { buildReadinessReport } from "@/lib/interview/report";
 import { historyHash, signState, verifyState } from "@/lib/interview/token";
-import type { InterviewState, InterviewView, ProposedMove, ReadinessReport, TurnDecision } from "@/lib/interview/types";
+import type { ActionType, InterviewState, InterviewView, ProposedMove, ReadinessReport, TurnDecision } from "@/lib/interview/types";
 import { CODING_INTRO, codingQuestionFor, codingSeedFrom } from "@/lib/fixtures/technical-questions";
 import {
   askedQuestionsBlock,
@@ -18,12 +20,12 @@ import {
   recallQuery,
   rememberAnswer,
   rememberAskedQuestion,
-  wasAlreadyAsked,
 } from "@/lib/memory";
+import { isNoAnswer } from "@/lib/llm/parse";
 import { analyzeAnswers, pendingAnswers } from "@/lib/llm/analyze";
 import type { AdaptiveLLMProvider } from "@/lib/llm/provider";
 import { stripSpeechTags } from "@/lib/speakable";
-import type { InterviewerTurn, InterviewerTurnType, InterviewRequest, RubricEntry } from "@/lib/types";
+import type { HistoryEntry, InterviewerTurn, InterviewerTurnType, InterviewRequest, RubricEntry } from "@/lib/types";
 
 // One adaptive interviewer turn, end to end:
 //
@@ -138,27 +140,45 @@ interface Produced {
   rejected?: string;
 }
 
+/** Moves that ask for more on known ground — the ones a memory check applies to. */
+const PROBING: readonly ActionType[] = ["follow_up", "clarify", "probe_resume", "adjust_difficulty", "switch_competency"];
+
+function recentAnswers(history: readonly HistoryEntry[], n: number): string[] {
+  return history
+    .filter((h) => h.speaker === "candidate" && !isNoAnswer(h.text) && !h.text.trim().startsWith("```"))
+    .slice(-n)
+    .map((h) => h.text);
+}
+
 async function produce(req: InterviewRequest, s: InterviewState, d: TurnDecision, recall: string, opts: AdaptiveTurnOptions): Promise<Produced> {
   const lastQuestion = [...req.history].reverse().find((h) => h.speaker === "interviewer")?.text ?? "";
+  // The WHOLE round, not a window: live run turn 8 re-asked "why you chose
+  // Spring Boot" because that answer had aged out of a six-answer window.
+  const answers = recentAnswers(req.history, 40);
+  const engine: VoiceEngineKind = req.voiceEngine ?? "kokoro";
   if (d.kind === "coding") {
     const seed = codingSeedFrom(req.candidateName, req.history);
     const problem = codingQuestionFor(req.role, req.codeLanguage, seed);
     return { text: `${CODING_LEAD_INS[hashIndex(seed, CODING_LEAD_INS.length)]} ${problem.text}`, move: null, note: null, source: "engine" };
   }
   const fallback = (move: ProposedMove | null, rejected?: string): Produced => ({
-    text: fallbackText({ state: s, decision: d, move, candidateName: req.candidateName, profile: req.profile, lastQuestion }),
+    text: fallbackText({ state: s, decision: d, move, candidateName: req.candidateName, profile: req.profile, lastQuestion, answers, engine }),
     move,
     note: null,
     source: "fallback",
     ...(rejected ? { rejected } : {}),
   });
-  const brief = buildBrief(s, d);
   const objective = objectiveLine(s, d);
   const ctx = moveContext(s, req.history, d.last, opts.now);
   let rejected: string | undefined;
+  const avoid: string[] = [];
+  /** The move the retry must execute — a DIFFERENT one when the first attempt
+   * repeated itself, or the recommended one when its move was refused. */
+  let retryMove: ProposedMove | null = null;
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const forcedMove = attempt === 1 && d.kind === "move" ? d.recommended : null;
+    const forcedMove = attempt === 1 && d.kind === "move" ? (retryMove ?? d.recommended) : null;
+    const brief = buildBrief(s, d, { avoid });
     let out;
     try {
       out = await opts.provider.generate({ req, kind: d.kind, brief, objective, recall, forcedMove, signal: opts.signal });
@@ -166,27 +186,45 @@ async function produce(req: InterviewRequest, s: InterviewState, d: TurnDecision
       console.warn(`[interview] model turn failed, the deterministic interviewer speaks — ${err instanceof Error ? err.message : String(err)}`);
       return fallback(d.recommended, rejected);
     }
-    if (!out) return fallback(d.recommended, rejected);
-    const clean = stripSpeechTags(out.text).trim();
+    if (!out) return fallback(retryMove ?? d.recommended, rejected);
+    const spoken = sanitizeForVoice(out.text, engine);
+    const clean = stripSpeechTags(spoken).trim();
     const question = extractQuestion(clean);
     if (!clean) {
       rejected = "empty reply";
       continue;
     }
-    if (d.kind !== "open" && clean.includes("?") && question && wasAlreadyAsked(question, s.asked)) {
+    const proposedAction = (out.move as { action?: unknown } | null)?.action;
+    const action = typeof proposedAction === "string" ? proposedAction : (d.recommended?.action ?? null);
+    // Interview memory, applied to the model's words before they are spoken.
+    if (d.kind !== "open" && question && isSameQuestion(question, s.asked)) {
       rejected = "repeated a question already asked";
+      avoid.push(`You asked "${question.slice(0, 140)}" — that was already asked. Ask for something new.`);
+      retryMove = d.kind === "move" ? alternativeMove(ctx, [action as ActionType]) : null;
+      console.warn(`[interview] rejected a repeated question — regenerating${retryMove ? ` with ${retryMove.action}` : ""}`);
       continue;
     }
-    if (d.kind !== "move") return { text: out.text, move: null, note: out.note, source: "model" };
-    if (forcedMove) return { text: out.text, move: forcedMove, note: out.note, source: "model", ...(rejected ? { rejected } : {}) };
+    if (d.kind === "move" && question && (!action || PROBING.includes(action as ActionType))) {
+      const covered = alreadyAnswered(question, answers);
+      if (covered) {
+        rejected = "asked something they already answered";
+        avoid.push(`"${question.slice(0, 140)}" is already answered — they said: "${covered.slice(0, 160)}". Ask only about what they have NOT said.`);
+        retryMove = alternativeMove(ctx, [action as ActionType]);
+        console.warn(`[interview] rejected an already-answered question — regenerating${retryMove ? ` with ${retryMove.action}` : ""}`);
+        continue;
+      }
+    }
+    if (d.kind !== "move") return { text: spoken, move: null, note: out.note, source: "model" };
+    if (forcedMove) return { text: spoken, move: forcedMove, note: out.note, source: "model", ...(rejected ? { rejected } : {}) };
     const verdict = validateMove(out.move ?? d.recommended, ctx);
     if (verdict.ok) {
-      return { text: out.text, move: verdict.move, note: out.note, source: "model", ...(out.move ? {} : { rejected: "no move line — recommended move assumed" }) };
+      return { text: spoken, move: verdict.move, note: out.note, source: "model", ...(out.move ? {} : { rejected: "no move line — recommended move assumed" }) };
     }
     rejected = verdict.reason;
+    retryMove = null;
     console.warn(`[interview] proposed move refused (${verdict.reason}) — regenerating with the recommended move`);
   }
-  return fallback(d.recommended, rejected);
+  return fallback(retryMove ?? d.recommended, rejected);
 }
 
 export async function runAdaptiveTurn(req: InterviewRequest, opts: AdaptiveTurnOptions): Promise<AdaptiveTurnResult> {
@@ -216,7 +254,9 @@ export async function runAdaptiveTurn(req: InterviewRequest, opts: AdaptiveTurnO
     const facts = peekRecalledFacts(subject);
     const asked = peekAskedQuestions(subject, req.roundType);
     if (facts === null || asked === null) primeCandidateMemory({ subject, roundType: req.roundType, candidateName: req.candidateName, query: recallQuery(req.history) });
-    recall = [recallBlock(facts ?? []), askedQuestionsBlock(asked ?? [])].filter(Boolean).join("\n");
+    // Cross-session questions only: this session's own are in the brief.
+    const crossSession = (asked ?? []).filter((q) => !isSameQuestion(q, ingested.asked));
+    recall = [recallBlock(facts ?? []), askedQuestionsBlock(crossSession)].filter(Boolean).join("\n");
     const answer = latestAnswer(req.history);
     if (answer && !opts.speculative) rememberAnswer(subject, req.roundType, answer, req.candidateName);
   }

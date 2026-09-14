@@ -19,6 +19,7 @@ import type {
 import { extractQuestion, questionKey } from "@/lib/memory";
 import { isNoAnswer, looksLikeCandidateQuestion } from "@/lib/llm/parse";
 import { verifyQuote } from "@/lib/rubric";
+import { contentTerms } from "@/lib/interview/dedupe";
 import type { HistoryEntry, RubricEntry, RubricScores } from "@/lib/types";
 
 // The interview state machine. Pure: state in, state out, no clock or network
@@ -202,9 +203,9 @@ function verifyClaims(s: InterviewState, a: AnswerAnalysis): void {
       (claim.area.startsWith("project:") && lower.includes(claim.area.slice("project:".length))) ||
       claim.id === probedId;
     if (!mentions) continue;
-    if (a.quality === "strong" || (a.quality === "adequate" && claim.id === probedId)) {
+    if (a.quality === "strong" || a.quality === "adequate") {
       claim.status = "supported";
-      claim.confidence = Math.min(1, claim.confidence + 0.3);
+      claim.confidence = Math.min(1, claim.confidence + (a.quality === "strong" ? 0.3 : 0.2));
       const quote = evidenceQuote(a);
       if (quote && !claim.evidence.includes(quote)) claim.evidence = [...claim.evidence, quote].slice(-3);
     } else if (claim.id === probedId && ["vague", "tap-out", "silent"].includes(a.quality)) {
@@ -312,7 +313,10 @@ export function ingest(prev: InterviewState, history: HistoryEntry[], now: numbe
 
 function codingReady(s: InterviewState): boolean {
   if (!s.plan.coding || s.coding.askedTurn !== null) return false;
-  if (s.answers < 2) return false;
+  // Two complete answers can assess the project thread; the editor still
+  // waits for a third so the round has been a conversation before it becomes
+  // an exercise (live run: coding opened on turn 2, which felt abrupt).
+  if (s.answers < 3) return false;
   const hasProjects = s.plan.competencies.some((c) => c.id === "projects");
   const projectsDone = !hasProjects || isAssessed(s.ledger.projects);
   const touched = s.plan.competencies.some((c) => c.id !== "projects" && c.id !== "problem-solving" && (s.ledger[c.id]?.evidence.length ?? 0) > 0);
@@ -323,7 +327,7 @@ function codingReady(s: InterviewState): boolean {
 export function moveContext(s: InterviewState, history: HistoryEntry[], last: AnswerAnalysis | null, now: number): MoveContext {
   const recentAnswers = history
     .filter((h) => h.speaker === "candidate" && !isNoAnswer(h.text))
-    .slice(-3)
+    .slice(-6)
     .map((h) => h.text);
   return { state: s, last, recentAnswers, now };
 }
@@ -518,12 +522,15 @@ export function mergeModelAnalysis(prev: InterviewState, results: ModelAnswerAna
       }
     }
     const fresh: Claim[] = [];
-    for (const mc of r.claims) {
+    for (const mc of r.claims.slice(0, 2)) {
       if (!mc.quote || !verifyQuote(mc.quote, answer)) continue;
       const { area, tech } = canonicalArea(`${mc.area} ${mc.text}`);
       const claim: Claim = {
         id: `c${s.seq++}`,
-        text: mc.text.slice(0, 140),
+        // The candidate's own words, first person stripped — the model writes
+        // claims in the third person ("Candidate deployed the app"), which
+        // read back as "you mentioned you Candidate deployed…".
+        text: claimTextFrom(mc.quote, mc.text),
         area: area ?? (tech ?? mc.area.toLowerCase().slice(0, 40)),
         ...(tech ? { tech } : {}),
         kind: mc.kind,
@@ -548,6 +555,7 @@ export function mergeModelAnalysis(prev: InterviewState, results: ModelAnswerAna
     for (const mc of r.contradictions) {
       const earlier = s.claims.find((c) => c.id === mc.claimId);
       if (!earlier || !mc.quote || !verifyQuote(mc.quote, answer) || verifyQuote(mc.quote, earlier.quote)) continue;
+      if (!plausibleContradiction(earlier, mc.quote)) continue;
       if (s.contradictions.some((x) => x.a === earlier.id && x.turnB === r.index)) continue;
       const laterId = `c${s.seq++}`;
       const later: Claim = {
@@ -592,6 +600,30 @@ export function mergeModelAnalysis(prev: InterviewState, results: ModelAnswerAna
   }
   s.updatedAt = now;
   return s;
+}
+
+/** A claim's text from the candidate's own quote: first person stripped, one
+ * clause, never the model's third-person paraphrase. */
+function claimTextFrom(quote: string, fallback: string): string {
+  const clause = quote.replace(/\s+/g, " ").trim().split(/[.;!?]|,\s+(?:and|but|so)\s+/)[0] ?? "";
+  const own = clause.replace(/^(?:so|and|then|basically|honestly|well|yeah)[,\s]+/i, "").replace(/^(?:i(?:'ve|'d|'m| have| had| was| am| also| then| just)?)\s+/i, "").trim();
+  if (own.length >= 8) return own.slice(0, 140);
+  return fallback.replace(/^(?:the\s+)?candidate\s+/i, "").replace(/^(?:they|he|she)\s+/i, "").slice(0, 140);
+}
+
+/** The later quote must be ABOUT the earlier claim — sharing at least one
+ * content term with it — and must limit or deny something. The background
+ * model reported "learned Docker in four days" vs "still don't know advanced
+ * networking" as a contradiction; it is not one, and asking the candidate to
+ * "clarify what part you owned" about it made no sense. */
+const LIMITING = /\b(not|never|didn't|don't|doesn't|wasn't|weren't|isn't|aren't|haven't|hadn't|couldn't|can't|only|just|no|none|nobody|someone else|somebody else|my friend|another person|rather than|instead|mostly|mainly|actually)\b/i;
+function plausibleContradiction(earlier: Claim, laterQuote: string): boolean {
+  if (!LIMITING.test(laterQuote)) return false;
+  const a = contentTerms(`${earlier.text} ${earlier.quote}`);
+  const b = contentTerms(laterQuote);
+  let shared = 0;
+  for (const t of a) if (b.has(t)) shared++;
+  return shared >= 1 || Boolean(earlier.tech && b.has(earlier.tech));
 }
 
 // ——— the room's view ———

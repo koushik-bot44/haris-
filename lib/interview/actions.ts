@@ -22,7 +22,10 @@ import { verifyQuote } from "@/lib/rubric";
 // hard safety caps (hardCapReason) — they never decide the next move.
 
 export const MAX_FOLLOW_UPS = 2;
-export const MAX_CLARIFIES = 2;
+/** ONE request for specifics per thread. A second "be concrete" is the sound of
+ * an interviewer not listening; a still-thin answer is information, not a
+ * prompt to loop — record the struggle and move on. */
+export const MAX_CLARIFIES = 1;
 export const MAX_CHALLENGES = 1;
 /** Interviewer turns one competency thread may run before switching is allowed
  * regardless of coverage — an honest "I don't know" must not trap anyone. */
@@ -159,6 +162,13 @@ export function validateMove(raw: unknown, ctx: MoveContext): MoveVerdict {
       if (claim.status === "contradicted") return fail("that claim is contradicted — use test_contradiction");
       if (claim.probes >= MAX_CLAIM_PROBES) return fail("that claim has already been probed enough");
       const comp = claim.competency && planHas(state, claim.competency) ? claim.competency : (current ?? undefined);
+      // Claims the model lifts from answers are plentiful; verifying one more on
+      // ground that is already assessed is how a round got stuck on one
+      // competency for eleven turns. Resume claims stay probeable.
+      if (comp === current && threadTurns(state) >= MAX_THREAD_TURNS) return fail("this thread has run its course — switch or wrap");
+      if (claim.source !== "resume" && comp && isAssessed(state.ledger[comp]) && comp === current) {
+        return fail(`${comp} is already assessed — move on rather than verifying more of it`);
+      }
       return ok({ ...move, ...(comp ? { competency: comp } : {}) });
     }
     case "adjust_difficulty": {
@@ -186,7 +196,11 @@ export function validateMove(raw: unknown, ctx: MoveContext): MoveVerdict {
         const ledger = state.ledger[current];
         const exhausted = threadTurns(state) >= MAX_THREAD_TURNS || (ledger?.struggles ?? 0) >= 2;
         const tappedOutTwice = recentQualities(state, current, 2).filter((q) => q === "tap-out" || q === "silent").length >= 2;
-        if (!isAssessed(ledger) && !exhausted && !tappedOutTwice) {
+        // Probed once and still thin: take the answer and move on rather than
+        // asking again in other words.
+        const probedOnce = (state.thread.clarifies >= 1 || state.thread.challenges >= 1) && last !== null && ["vague", "tap-out", "silent"].includes(last.quality);
+        const spentTwo = state.thread.followUps + state.thread.clarifies + state.thread.challenges >= 2 && (ledger?.evidence.length ?? 0) >= 1;
+        if (!isAssessed(ledger) && !exhausted && !tappedOutTwice && !probedOnce && !spentTwo) {
           return fail(`${current} has not reached minimum coverage yet`);
         }
       }
@@ -228,6 +242,18 @@ export function nextCompetency(ctx: MoveContext): string | null {
   return null;
 }
 
+/** A different valid move when the model's own choice produced a repeat: new
+ * ground first, then a claim to verify, then anything else that validates. */
+export function alternativeMove(ctx: MoveContext, exclude: readonly ActionType[]): ProposedMove | null {
+  const order: ActionType[] = ["switch_competency", "probe_resume", "test_contradiction", "adjust_difficulty", "challenge", "follow_up", "clarify"];
+  const options = allowedMoves(ctx).filter((m) => !exclude.includes(m.action));
+  for (const action of order) {
+    const found = options.find((m) => m.action === action);
+    if (found) return { action: found.action, ...(found.competency ? { competency: found.competency } : {}), ...(found.target ? { target: found.target } : {}), ...(found.direction ? { direction: found.direction } : {}) };
+  }
+  return null;
+}
+
 /** Every move that would pass validation right now, with the reason it fits. */
 export function allowedMoves(ctx: MoveContext): MoveOption[] {
   const { state, last } = ctx;
@@ -254,8 +280,8 @@ export function allowedMoves(ctx: MoveContext): MoveOption[] {
   }
   const claims = state.claims
     .filter((c) => c.status !== "supported" && c.status !== "contradicted" && c.probes < MAX_CLAIM_PROBES)
-    .sort((a, b) => Number(b.competency === current) - Number(a.competency === current) || Number(a.source !== "resume") - Number(b.source !== "resume"))
-    .slice(0, 3);
+    .sort((a, b) => Number(a.source !== "resume") - Number(b.source !== "resume") || Number(b.competency === current) - Number(a.competency === current))
+    .slice(0, 2);
   for (const c of claims) add({ action: "probe_resume", target: c.id }, `verify: ${c.text}`);
   const next = nextCompetency(ctx);
   if (next) add({ action: "switch_competency", competency: next }, isCovered(state.ledger[next]) ? "optional ground with time left" : "required ground not yet assessed");
@@ -290,9 +316,12 @@ export function recommendMove(ctx: MoveContext): ProposedMove {
   const next = nextCompetency(ctx);
   const switchNext = next ? ({ action: "switch_competency", competency: next } as ProposedMove) : null;
   const open = state.contradictions.find((c) => c.status === "open");
+  // Only the resume's own claims earn a probe by recommendation; answer-claims
+  // are the model's to pick, and only while the ground is still open.
   const claimForCurrent = state.claims.find(
-    (c) => c.status === "unverified" && c.probes === 0 && (c.competency === current || (!c.competency && c.source === "answer")),
+    (c) => c.status === "unverified" && c.probes === 0 && c.source === "resume" && c.competency === current,
   );
+  const currentAssessed = Boolean(current && isAssessed(state.ledger[current]));
 
   const choice =
     pick(open ? { action: "test_contradiction", target: open.id } : null) ??
@@ -300,12 +329,16 @@ export function recommendMove(ctx: MoveContext): ProposedMove {
     (last?.quality === "tap-out"
       ? pick({ action: "adjust_difficulty", competency: current, direction: "down" }, switchNext, { action: "clarify", competency: current })
       : null) ??
+    // Already asked for specifics once and it is still thin: move on.
+    (last?.quality === "vague" && state.thread.clarifies >= 1 ? pick(switchNext, claimForCurrent ? { action: "probe_resume", target: claimForCurrent.id } : null, { action: "follow_up", competency: current }) : null) ??
     (last?.flags.includes("overclaim") ? pick({ action: "challenge", competency: current }) : null) ??
     (last?.quality === "vague" ? pick({ action: "clarify", competency: current }, { action: "follow_up", competency: current }) : null) ??
     (last?.quality === "strong" && current && !isSufficient(state.ledger[current])
       ? pick({ action: "adjust_difficulty", competency: current, direction: "up" }, { action: "follow_up", competency: current })
       : null) ??
     (current && !isCovered(state.ledger[current]) ? pick({ action: "follow_up", competency: current }) : null) ??
+    // Assessed ground is left before anything else on it is verified.
+    (currentAssessed ? pick(switchNext) : null) ??
     pick(claimForCurrent ? { action: "probe_resume", target: claimForCurrent.id } : null) ??
     pick(switchNext) ??
     pick({ action: "wrap" }) ??
