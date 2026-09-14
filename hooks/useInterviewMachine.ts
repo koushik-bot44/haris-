@@ -106,6 +106,48 @@ function readInterviewExtras(): InterviewExtras {
 /** The room's own barge-in preference, remembered for the visit. */
 const BARGE_IN_KEY = "pds_barge_in_room";
 
+/** A refresh used to restart the whole interview from the greeting: history
+ * lived in memory only. The room now keeps its progress for the tab, and a
+ * reload resumes where it left off — the pending question is spoken again,
+ * nothing is asked twice, and the signed server state travels with it. */
+const RESUME_KEY = "pds_room_resume";
+const RESUME_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+
+interface ResumeRecord {
+  key: string;
+  at: number;
+  history: HistoryEntry[];
+  turns: Turn[];
+  state: string | null;
+  questionIndex: number;
+  codingUsed: boolean;
+}
+
+function readResume(key: string): ResumeRecord | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(RESUME_KEY);
+    if (!raw) return null;
+    const rec = JSON.parse(raw) as ResumeRecord;
+    if (rec.key !== key || Date.now() - rec.at > RESUME_MAX_AGE_MS || !Array.isArray(rec.history) || rec.history.length === 0) return null;
+    return rec;
+  } catch {
+    return null;
+  }
+}
+
+function writeResume(rec: ResumeRecord): void {
+  try {
+    window.sessionStorage.setItem(RESUME_KEY, JSON.stringify(rec));
+  } catch {}
+}
+
+function clearResume(): void {
+  try {
+    window.sessionStorage.removeItem(RESUME_KEY);
+  } catch {}
+}
+
 /** May the candidate interrupt the interviewer? ON by default.
  *
  * A real interview is interruptible. Waiting out every question with a dead mic
@@ -251,6 +293,10 @@ export interface InterviewMachine {
   persona: Persona;
   /** Whether the candidate may interrupt the interviewer mid-sentence (default on). */
   bargeIn: boolean;
+  /** True when this tab holds an unfinished round that Start will continue. */
+  resuming: boolean;
+  /** Forget the unfinished round (leaving the room deliberately). */
+  discardResume: () => void;
   /** Opt out (or back in) from the preroll screen; remembered for the visit. */
   setBargeIn: (on: boolean) => void;
   /** Whether the chosen voice can speak yet — the preroll holds Start on it. */
@@ -290,6 +336,17 @@ export function useInterviewMachine(
   const [error, setError] = useState<string | null>(null);
   const [errorKind, setErrorKind] = useState<"quota" | "throttle" | null>(null);
   const [bargeIn, setBargeInState] = useState<boolean>(readBargeIn);
+  const resumeKey = `${candidateName}|${role}|${roundType}`;
+  const resumeRef = useRef<ResumeRecord | null | undefined>(undefined);
+  if (resumeRef.current === undefined) resumeRef.current = readResume(resumeKey);
+  const [resuming, setResuming] = useState<boolean>(() => resumeRef.current !== null && resumeRef.current !== undefined);
+  const questionIndexRef = useRef(0);
+  const persistRef = useRef<() => void>(() => {});
+  const discardResume = useCallback(() => {
+    resumeRef.current = null;
+    setResuming(false);
+    clearResume();
+  }, []);
   /** The voice the session settled on and whether it can speak yet. Only the
    * on-device engine has a warm-up (a one-time model download); the preroll
    * holds the Start button until it is ready, because a greeting spoken by the
@@ -557,6 +614,9 @@ export function useInterviewMachine(
         ...(extrasRef.current?.codeLanguage ? { codeLanguage: extrasRef.current.codeLanguage } : {}),
         ...(extrasRef.current?.jobDescription ? { jobDescription: extrasRef.current.jobDescription } : {}),
         ...(stateTokenRef.current ? { state: stateTokenRef.current } : {}),
+        // Which voice will speak the reply, so the server keeps expressions the
+        // engine can actually pronounce.
+        ...(typeof window !== "undefined" ? { voiceEngine: getVoiceEngine() } : {}),
         history,
         ...(stream ? { stream: true } : {}),
         // A pre-fetch against a partial answer: the server never commits it
@@ -665,7 +725,8 @@ export function useInterviewMachine(
       voiceResolvedRef.current = true; // the preroll's Start may now judge readiness
       if (endedRef.current) return;
       void prepareAcks(voiceForRound(roundType));
-      if (SPECULATE && !openingRef.current) {
+      // No opening pre-fetch when resuming: the round continues from its history.
+      if (SPECULATE && !openingRef.current && !resumeRef.current) {
         openingRef.current = prefetchTurn([], 0);
       }
     });
@@ -746,6 +807,7 @@ export function useInterviewMachine(
       scoring: scoringStatus(scoredEntries.length, tooShortRef.current.size, scoreFailuresRef.current),
       ...(reportRef.current ? { readiness: reportRef.current } : {}),
     };
+    clearResume();
     const { persisted } = saveSession(s);
     setSessionPersisted(persisted);
     setSession(s);
@@ -869,6 +931,7 @@ export function useInterviewMachine(
         combinedAnswersRef.current.set(q.id, combined);
         fireScoring(q.id, q.text, combined);
       }
+      persistRef.current();
     },
     [fireScoring],
   );
@@ -924,7 +987,11 @@ export function useInterviewMachine(
     // visibly rewinds reads as the interviewer losing their place; scoring
     // groups answers by this id, so a rewind would also file a new question's
     // answer under an old one.
-    if (turn.questionIndex > 0) setQuestionIndex((i) => Math.max(i, turn.questionIndex));
+    if (turn.questionIndex > 0) {
+      questionIndexRef.current = Math.max(questionIndexRef.current, turn.questionIndex);
+      setQuestionIndex((i) => Math.max(i, turn.questionIndex));
+    }
+    persistRef.current();
     codingActiveRef.current = Boolean(turn.coding);
     setCodingTurn(Boolean(turn.coding));
     // Track which main question the next answer belongs to (scoring identity):
@@ -1569,6 +1636,30 @@ export function useInterviewMachine(
   const startInterview = useCallback(() => {
     if (startedRef.current) return;
     startedRef.current = true;
+    // Resume an unfinished round from this tab: restore what was said and the
+    // signed server state; if the candidate was mid-answer, speak the pending
+    // question again rather than asking the server for a new one.
+    const rec = resumeRef.current;
+    if (rec) {
+      resumeRef.current = null;
+      setResuming(false);
+      const last = rec.history[rec.history.length - 1];
+      const pending = last?.speaker === "interviewer" ? last : null;
+      historyRef.current = pending ? rec.history.slice(0, -1) : [...rec.history];
+      const lastTurn = rec.turns[rec.turns.length - 1];
+      turnsRef.current = pending && lastTurn?.speaker === "interviewer" ? rec.turns.slice(0, -1) : [...rec.turns];
+      stateTokenRef.current = rec.state;
+      codingUsedRef.current = rec.codingUsed;
+      questionIndexRef.current = rec.questionIndex;
+      setQuestionIndex(rec.questionIndex);
+      if (pending) {
+        const coding = /editor is open|use the editor/i.test(pending.text);
+        void deliverTurn({ type: "question", text: pending.text, questionIndex: rec.questionIndex, done: false, asked: true, ...(coding ? { coding: true } : {}) }, null, false);
+      } else {
+        void callInterviewer();
+      }
+      return;
+    }
     // Pre-warmed opening (fired during preroll): the greeting audio is already
     // fetched + decoded, so the interviewer speaks the instant of the click.
     const opening = openingRef.current;
@@ -1595,6 +1686,19 @@ export function useInterviewMachine(
     }
     void callInterviewer();
   }, [callInterviewer, deliverTurn]);
+
+  persistRef.current = () => {
+    if (endedRef.current || historyRef.current.length === 0) return;
+    writeResume({
+      key: resumeKey,
+      at: Date.now(),
+      history: historyRef.current,
+      turns: turnsRef.current,
+      state: stateTokenRef.current,
+      questionIndex: questionIndexRef.current,
+      codingUsed: codingUsedRef.current,
+    });
+  };
 
   const retryConnection = useCallback(() => {
     if (autoRetryTimerRef.current) {
@@ -1639,6 +1743,8 @@ export function useInterviewMachine(
     ),
     persona: roundType === "technical" ? TECH_PERSONA : HR_PERSONA,
     bargeIn,
+    resuming,
+    discardResume,
     setBargeIn,
     voiceWarmup,
     roundType,

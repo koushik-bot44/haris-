@@ -135,6 +135,7 @@ function InterviewRoom() {
   }, [m.degradePrefill]);
 
   const leave = () => {
+    m.discardResume();
     m.cleanup();
     router.push("/");
   };
@@ -347,7 +348,12 @@ function Preroll({ m }: { m: M }) {
   const first = m.persona.name.split(" ")[0];
   return (
     <section className="card panel-enter">
-      <h2>Before we start</h2>
+      <h2>{m.resuming ? "Welcome back" : "Before we start"}</h2>
+      {m.resuming && (
+        <p className="card tinted" role="status">
+          This tab still holds your unfinished round — Start picks it up where you left off, with the last question spoken again. Nothing you already answered is asked twice.
+        </p>
+      )}
       <p>
         A real conversation with {first} — <strong>about 10 minutes</strong>. They follow what you
         say, so answers change where it goes, and you can ask them questions too.
