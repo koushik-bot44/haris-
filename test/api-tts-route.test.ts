@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET, POST } from "@/app/api/tts/route";
 import { chunkForOrpheus, cloudSpeak, TtsEngineError } from "@/lib/tts-engines";
-import { CACHEABLE_TEXT_MAX, ttsCacheClear, ttsCacheStats } from "@/lib/tts-cache";
+import { CACHEABLE_TEXT_MAX, ttsCacheClear, ttsCacheGet, ttsCacheKey, ttsCacheStats } from "@/lib/tts-cache";
 import { pcmToWav } from "@/lib/pcm-wav";
 import { TURBO_TAGS } from "@/lib/speakable";
 
@@ -784,7 +784,11 @@ describe("POST /api/tts — the short-line cache", () => {
     upstream.close();
     const end = await within(reader.read(), 500, "the stream to close after upstream did");
     expect(end.done).toBe(true);
-    await waitFor(() => ttsCacheStats().entries === 1, "the tee'd copy to reach the cache");
+    // This key, not a global count: earlier tests in this file fire streamed
+    // requests they never drain, and each one's tee'd cache write can land
+    // during this test (it does on Node 22), which made "exactly one entry"
+    // false for a reason that has nothing to do with the code under test.
+    await waitFor(() => ttsCacheGet(ttsCacheKey("openai", "hr", SHORT)) !== null, "the tee'd copy to reach the cache");
   });
 
   it("the tee'd copy lands in the cache as a finite wav and is served on the next ask", async () => {
