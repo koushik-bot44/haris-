@@ -39,6 +39,9 @@ export const interviewRequestSchema = z.object({
         text: z.string().max(6000), // coding answers are longer than spoken ones
       }),
     )
-    // Deep-dive rounds run to HARD_STOP_ANSWERS=16 answers ≈ 33+ entries.
-    .max(48),
+    // Deep-dive rounds run to HARD_STOP_ANSWERS=16 answers, but conversational
+    // replies, nudged re-asks and the candidate's own questions add entries
+    // that are not answers. 48 turned a long, GOOD interview into a permanent
+    // "connection lost"; clampTurn wraps the round up well before this cap.
+    .max(120),
 });

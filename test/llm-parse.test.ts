@@ -176,6 +176,59 @@ describe("parseStreamedTurn (spoken text + @@CTRL protocol)", () => {
     expect(t?.type).toBe("greeting");
   });
 
+  // ——— the bare-brace rule under attack ———
+
+  it("a quoted object at the very END of a sentence is speech, not control", () => {
+    // The end-of-text rule alone still adopted this — done:true ended the round
+    // and the spoken text stopped at the brace. "error" is not one of our turn
+    // types, so this cannot be the model's control object.
+    const t = parseStreamedTurn('Your handler returned {"type":"error","done":true}');
+    expect(t?.text).toBe('Your handler returned {"type":"error","done":true}');
+    expect(t?.done).toBe(false);
+  });
+
+  it("an explicit @@CTRL after a quoted object still wins, and keeps the question", () => {
+    const raw = 'Your handler returned {"type":"error","done":true} — why not a 4xx?\n@@CTRL {"type":"followup","questionIndex":2,"done":false}';
+    const t = parseStreamedTurn(raw);
+    expect(t?.text).toBe('Your handler returned {"type":"error","done":true} — why not a 4xx?');
+    expect(t).toMatchObject({ type: "followup", questionIndex: 2, done: false, asked: true });
+  });
+
+  it("a quoted object earlier in the reply does not hijack the bare-brace cut", () => {
+    const t = parseStreamedTurn('A {"type":"x"} B {"type":"question","questionIndex":4,"asked":true,"done":false}');
+    expect(t?.text).toBe('A {"type":"x"} B');
+    expect(t?.questionIndex).toBe(4);
+  });
+
+  it("two control lines: the first balanced object is read, not both glued together", () => {
+    const ctrl = '{"type":"question","questionIndex":3,"done":false}';
+    expect(parseStreamedTurn(`Nice.\n@@CTRL ${ctrl}\n@@CTRL ${ctrl}`)).toMatchObject({ text: "Nice.", questionIndex: 3 });
+    expect(parseStreamedTurn(`Nice.\n${ctrl}\n${ctrl}`)).toMatchObject({ text: "Nice.", questionIndex: 3 });
+  });
+
+  it("braces inside string values neither close nor nest the control object", () => {
+    expect(parseStreamedTurn('Nice.\n@@CTRL {"type":"reply","note":"a } b","done":false}')).toMatchObject({ text: "Nice.", type: "reply" });
+    const t = parseStreamedTurn('It printed {"type":"x}"} and then crashed. Why?\n@@CTRL {"type":"followup","questionIndex":1,"done":false}');
+    expect(t?.text).toBe('It printed {"type":"x}"} and then crashed. Why?');
+    expect(t?.questionIndex).toBe(1);
+    expect(parseStreamedTurn('Tell me more.\n@@CTRL {"type":"question","questionIndex":2,"meta":{"a":1},"done":false}')?.questionIndex).toBe(2);
+  });
+
+  it("tolerates whitespace after the control line", () => {
+    expect(parseStreamedTurn('Nice.\n@@CTRL {"type":"question","questionIndex":3,"done":false}\n \n')?.questionIndex).toBe(3);
+  });
+
+  it("control put BEFORE the speech on one line: the object is stripped, the words survive", () => {
+    const t = parseStreamedTurn('{"type":"question","questionIndex":1,"done":false} Tell me about yourself?');
+    expect(t?.text).toBe("Tell me about yourself?");
+    expect(t?.text).not.toContain("{");
+  });
+
+  it("a line-initial quoted object followed by speech is not scrubbed away", () => {
+    const t = parseStreamedTurn('{"type":"error"} is what it sent back. Why?\n@@CTRL {"type":"followup","questionIndex":1,"done":false}');
+    expect(t?.text).toBe('{"type":"error"} is what it sent back. Why?');
+  });
+
   it("returns null on empty input and on a control line with no speech", () => {
     expect(parseStreamedTurn("")).toBeNull();
     expect(parseStreamedTurn("   \n ")).toBeNull();
@@ -207,6 +260,47 @@ describe("visibleStreamText (streaming withhold rules)", () => {
   // so the TTS never starts saying "at at C T R L" before the turn resolves.
   it("cuts at an inline @@CTRL rather than streaming it to the voice", () => {
     expect(visibleStreamText("I saw @@CTRL in your code")).toBe("I saw");
+  });
+
+  it("never shrinks: a marker split across chunks is withheld, then cut, never spoken", () => {
+    const chunks = ["Good ", "answer", ".", " @", "@", "CT", "RL", " {", '"type"', ':"reply"', ',"done":false}'];
+    let buf = "";
+    let prev = "";
+    for (const c of chunks) {
+      buf += c;
+      const now = visibleStreamText(buf);
+      expect(now.startsWith(prev)).toBe(true);
+      expect(now).not.toMatch(/[@{]/);
+      prev = now;
+    }
+    expect(prev).toBe("Good answer.");
+  });
+
+  it("withholds a forming bare-brace object key by key, never speaking a fragment", () => {
+    const chunks = ["Good answer.", "\n{", '"', "ty", "pe", '"', ":", '"', "reply", '"', ',"done":false}'];
+    let buf = "";
+    for (const c of chunks) {
+      buf += c;
+      expect(visibleStreamText(buf)).toBe("Good answer.");
+    }
+  });
+
+  // The stream cut used to stop at the first bare-brace candidate for good, so
+  // the caption froze at "it returned" while the parser kept the whole line.
+  it("follows the parser: a quoted closed object with speech after it is released, monotonically", () => {
+    const chunks = ["it returned ", '{"type":', '"error"}', " and then", " crashed. Why?", '\n@@CTRL {"type":"followup","questionIndex":1,"done":false}'];
+    let buf = "";
+    const seen: string[] = [];
+    for (const c of chunks) {
+      buf += c;
+      seen.push(visibleStreamText(buf));
+    }
+    expect(seen[1]).toBe("it returned");
+    expect(seen[2]).toBe("it returned"); // closed, nothing after: could still be control
+    expect(seen[3]).toBe('it returned {"type":"error"} and then');
+    expect(seen[5]).toBe('it returned {"type":"error"} and then crashed. Why?');
+    for (let i = 1; i < seen.length; i++) expect(seen[i].startsWith(seen[i - 1])).toBe(true);
+    expect(parseStreamedTurn(buf)?.text).toBe(seen[5]);
   });
 });
 

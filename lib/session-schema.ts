@@ -108,6 +108,13 @@ export const sessionSchema = z
         summary: boundedText,
       })
       .strict(),
+    scoring: z
+      .object({
+        status: z.enum(["ok", "partial", "unavailable", "too_short", "none"]),
+        failed: z.number().int().nonnegative(),
+      })
+      .strict()
+      .optional(),
     gdMetrics: gdMetricsSchema.optional(),
     topic: z.string().max(500).optional(),
     retries: z.array(retryEntrySchema).max(SCORES_MAX * 3).optional(),

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Tab icon. Next.js serves app/icon.svg and links it, so the browser stops
+       asking for /favicon.ico (a 404 on every page load). A speaking orb: the
+       interviewer's voice, one circle. -->
+  <defs>
+    <radialGradient id="g" cx="40%" cy="35%" r="70%">
+      <stop offset="0" stop-color="#9fd3ff"/>
+      <stop offset="0.6" stop-color="#3b6fd8"/>
+      <stop offset="1" stop-color="#1b2a5a"/>
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#0e1428"/>
+  <circle cx="32" cy="32" r="18" fill="url(#g)"/>
+  <path d="M46 24a12 12 0 0 1 0 16" fill="none" stroke="#cfe6ff" stroke-width="3" stroke-linecap="round"/>
+  <path d="M51 19a19 19 0 0 1 0 26" fill="none" stroke="#cfe6ff" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+</svg>

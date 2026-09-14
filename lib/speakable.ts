@@ -2,7 +2,21 @@
 // one per turn; TTS receives the raw text WITH tags, while captions and stored
 // transcripts strip them via stripSpeechTags (the UI/transcript layer calls it).
 
-export const TURBO_TAGS: readonly string[] = ["[chuckle]", "[sigh]", "[clear throat]", "[gasp]"];
+// The full Chatterbox-Turbo tag set (resemble-ai/chatterbox). Every one of
+// these MUST be listed: unknown bracketed text is deliberately preserved (see
+// TAG_RE below), so a tag missing from this list survives stripSpeechTags and a
+// cloud engine reads it out loud as a word — "[laugh]" becomes "laugh".
+export const TURBO_TAGS: readonly string[] = [
+  "[laugh]",
+  "[chuckle]",
+  "[sigh]",
+  "[gasp]",
+  "[cough]",
+  "[sniff]",
+  "[groan]",
+  "[shush]",
+  "[clear throat]",
+];
 
 // Only the known tags — unknown bracketed text (e.g. "[laughs]") is preserved.
 const TAG_RE = new RegExp(

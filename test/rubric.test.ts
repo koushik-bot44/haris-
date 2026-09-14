@@ -57,6 +57,28 @@ describe("overall composition (coach tone from data)", () => {
   it("handles the unscored round", () => {
     expect(composeOverall([]).avgScore).toBeNull();
   });
+
+  it("never names the same criterion as both strength and weakness on a tie", () => {
+    const even = composeOverall([entry(3, 3, 3, 3)]);
+    expect(even.summary).toContain("even across all four");
+    const strong = composeOverall([entry(5, 5, 5, 5)]);
+    expect(strong.summary).toContain("even across all four");
+    // Partial tie: strongest relevance, the rest tied — the weakest is one of the rest.
+    const partial = composeOverall([entry(5, 3, 3, 3)]);
+    expect(partial.summary).toContain("staying on-point");
+    expect(partial.summary).not.toMatch(/strength this round: staying on-point.*work on.*staying on-point/);
+  });
+});
+
+describe("scoringStatus", () => {
+  it("classifies why a round has the scores it has", async () => {
+    const { scoringStatus } = await import("@/lib/rubric");
+    expect(scoringStatus(3, 0, 0)).toEqual({ status: "ok", failed: 0 });
+    expect(scoringStatus(2, 0, 1)).toEqual({ status: "partial", failed: 1 });
+    expect(scoringStatus(0, 0, 4)).toEqual({ status: "unavailable", failed: 4 });
+    expect(scoringStatus(0, 3, 0)).toEqual({ status: "too_short", failed: 0 });
+    expect(scoringStatus(0, 0, 0)).toEqual({ status: "none", failed: 0 });
+  });
 });
 
 describe("too-short gate", () => {

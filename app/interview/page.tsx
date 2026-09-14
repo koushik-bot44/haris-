@@ -11,6 +11,8 @@ import { DeliveryRow } from "@/components/report/DeliveryRow";
 import { QuestionCard } from "@/components/report/QuestionCard";
 import { TurnTimeline } from "@/components/report/TurnTimeline";
 import { getVoiceEngine, lastEngineUsed, type VoiceEngine } from "@/lib/tts";
+import { sttCapabilities } from "@/lib/stt";
+import { micHelp } from "@/lib/mic-help";
 import { codingQuestionFor, type CodingQuestion } from "@/lib/fixtures/technical-questions";
 import type { CodeLanguage, RolePreset } from "@/lib/types";
 
@@ -20,10 +22,11 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false 
 // display serif, large, centered (see .caption in globals.css). Everything
 // else stays quiet UI sans.
 const ENGINE_LABEL: Record<VoiceEngine, string> = {
+  cloud: "Cloud voice",
   chatterbox: "Studio voice",
   elevenlabs: "Cloud voice",
   kokoro: "On-device voice",
-  system: "System voice",
+  system: "Basic voice",
 };
 
 const CODE_LANGS: CodeLanguage[] = ["java", "python", "cpp", "javascript", "c"];
@@ -92,7 +95,10 @@ function InterviewRoom() {
   useEffect(() => {
     const inProgress = !["done", "micCheck", "preroll"].includes(m.phase);
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (inProgress) e.preventDefault();
+      if (!inProgress) return;
+      e.preventDefault();
+      // Legacy browsers only honour a set returnValue.
+      e.returnValue = "";
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
@@ -200,10 +206,18 @@ function InterviewRoom() {
       )}
       {m.phase === "connectionLost" && (
         <section className="card panel-enter" role="alert">
-          {m.error ? (
+          {m.error && !m.retryable ? (
             <>
               <h2>The interviewer is out of capacity</h2>
               <p className="muted">{m.error}</p>
+            </>
+          ) : m.error ? (
+            <>
+              <h2>One moment</h2>
+              <p className="muted">{m.error}</p>
+              <button className="btn" onClick={m.retryConnection}>
+                Try again
+              </button>
             </>
           ) : (
             <>
@@ -238,24 +252,6 @@ function InterviewRoom() {
 
 type M = ReturnType<typeof useInterviewMachine>;
 
-function micHelp(reason: string | null): string {
-  switch (reason) {
-    case "unsupported":
-      return "This browser has no built-in speech recognition — switching to the on-device engine (a one-time ~40MB download). Voice will work here once it's ready.";
-    case "not-allowed":
-    case "service-not-allowed":
-      return "The microphone is blocked. Click the lock (or camera) icon in the address bar → Microphone → Allow, then try again.";
-    case "network":
-      return "Your browser can't reach Google's speech service — Brave, Arc, plain Chromium builds, and some VPNs all block it (your internet is fine). Two fixes: open this page in real Google Chrome, or wait for the on-device speech engine below — a one-time ~40MB download that works in ANY browser, even offline.";
-    case "whisper_loading":
-      return "The on-device speech engine is still downloading (~40MB, one time). Try the microphone again when it says ready — or continue in text mode meanwhile.";
-    case "whisper_failed":
-      return "The on-device speech engine failed to load on this machine. Text mode works everywhere; real Google Chrome enables the online engine.";
-    default:
-      return "Microphone unavailable right now. You can retry, or continue in text mode — questions are still spoken aloud and always captioned.";
-  }
-}
-
 function useWhisperBadge(active: boolean): string {
   const [status, setStatus] = useState("off");
   useEffect(() => {
@@ -278,9 +274,9 @@ function MicCheck({ m }: { m: M }) {
       {!m.textMode ? (
         <>
           <p className="muted">
-            This is a spoken interview, so your browser will ask to use the microphone — that's the only
-            thing it's used for, and nothing is recorded or uploaded. Click below, then <strong>say your
-            name</strong> out loud.
+            This is a spoken interview, so your browser will ask to use the microphone. Your voice is
+            transcribed as you speak and never stored — only the words reach the interviewer. Click
+            below, then <strong>say your name</strong> out loud.
           </p>
           <div className="mic-row">
             <button className="btn" onClick={m.beginMicCheck}>
@@ -307,7 +303,7 @@ function MicCheck({ m }: { m: M }) {
         </>
       ) : (
         <>
-          <p className="muted">{micHelp(m.degradeReason)}</p>
+          <p className="muted">{micHelp(m.degradeReason, { cloudStt: Boolean(sttCapabilities()?.cloud) })}</p>
           <div className="mic-row">
             <button
               className="btn"
@@ -350,20 +346,51 @@ function Preroll({ m }: { m: M }) {
       <p>
         A real conversation with {first} — <strong>about 10 minutes</strong>. They follow what you
         say, so answers change where it goes, and you can ask them questions too.
-        {m.persona.initials === "AR" && <> There's <strong>hands-on coding</strong> in this one — an editor opens when it's time.</>}{" "}
+        {m.roundType === "technical" && <> There's <strong>hands-on coding</strong> in this one — an editor opens when it's time.</>}{" "}
         Answer out loud, take your time.
       </p>
       <p>
-        <strong>Pausing for ~2 seconds ends your answer</strong> — like handing the turn back to the
-        interviewer. You can also press <kbd>Enter</kbd> or the “I'm done answering” button.
+        <strong>A short pause ends your answer</strong> — like handing the turn back to the interviewer.
+        Trailing off mid-sentence (“and… um…”) buys you longer, and saying “that's it” hands over straight
+        away. You can also press <kbd>Enter</kbd> or the “I'm done answering” button.
       </p>
-      <p>
-        This is a real conversation: <strong>you can interrupt {first} any time — just start talking</strong>{" "}
-        and they'll stop and listen. Headphones make this seamless (without them, their voice through
-        your speakers can confuse the mic).
-      </p>
-      <button className="btn" onClick={m.startInterview}>
-        Start the interview
+      {m.bargeIn ? (
+        <p>
+          This is a real conversation: <strong>you can interrupt {first} any time — just start talking</strong>{" "}
+          and they'll stop and listen. Your mic is open from the moment they begin, so an answer that
+          starts early is never cut off at the front.
+        </p>
+      ) : (
+        <p>
+          {first} will finish each question before your mic opens — you asked for it that way.
+        </p>
+      )}
+      {/* The opt-out lives HERE, next to the explanation of what it does, and
+          defaults to on: interrupting is how interviews work. Speakers are fine
+          (their voice is filtered out of your answer); this is for a noisy room
+          or a shared desk, where someone else's talking is the real risk. */}
+      <label className="toggle-card">
+        <input type="checkbox" checked={m.bargeIn} onChange={(e) => m.setBargeIn(e.target.checked)} />
+        <span>
+          <span className="toggle-title">Let me interrupt {first} mid-question</span>
+          <span className="choice-desc small muted">
+            On by default. Turn it off in a noisy room or on a shared desk, where someone else talking is
+            the thing most likely to cut a question short.
+          </span>
+        </span>
+      </label>
+      {/* The on-device voice is a one-time download. Starting before it lands
+          meant the greeting came out of the robotic system voice and the
+          interviewer changed voice a minute in — so the button waits, and
+          says why. */}
+      {!m.voiceWarmup.ready && (
+        <p className="small muted" role="status" aria-live="polite">
+          Preparing {first}'s voice — a one-time download, kept by your browser
+          {m.voiceWarmup.progress !== null ? ` (${m.voiceWarmup.progress}%)` : ""}…
+        </p>
+      )}
+      <button className="btn" onClick={m.startInterview} disabled={!m.voiceWarmup.ready}>
+        {m.voiceWarmup.ready ? "Start the interview" : "Preparing the voice…"}
       </button>
     </section>
   );
@@ -395,6 +422,19 @@ function Live({
     setCodeDraft("");
   };
   const first = m.persona.name.split(" ")[0];
+  // The editor loads from a CDN at runtime; if it has not mounted within a
+  // few seconds (offline, blocked CDN), a plain textarea takes over so the
+  // coding answer is never impossible to give.
+  const [editorReady, setEditorReady] = useState(false);
+  const [editorTimedOut, setEditorTimedOut] = useState(false);
+  useEffect(() => {
+    if (!m.codingTurn) return;
+    setEditorReady(false);
+    setEditorTimedOut(false);
+    const id = setTimeout(() => setEditorTimedOut(true), 7000);
+    return () => clearTimeout(id);
+  }, [m.codingTurn]);
+  const useFallbackEditor = editorTimedOut && !editorReady;
 
   return (
     <section className="room-live">
@@ -418,14 +458,26 @@ function Live({
               <span className="code-pane-title">Hands-on question</span>
               <span className="chip">{LANG_LABEL[codingQ.language]}</span>
             </div>
-            <MonacoEditor
-              height="320px"
-              language={codingQ.language}
-              theme="vs"
-              value={codeDraft}
-              onChange={(v) => setCodeDraft(v ?? "")}
-              options={{ fontSize: 13, minimap: { enabled: false }, scrollBeyondLastLine: false, padding: { top: 12 } }}
-            />
+            {useFallbackEditor ? (
+              <textarea
+                aria-label="Code editor"
+                value={codeDraft}
+                onChange={(e) => setCodeDraft(e.target.value)}
+                spellCheck={false}
+                style={{ width: "100%", height: 320, fontFamily: "var(--font-mono), monospace", fontSize: 13, padding: 12 }}
+              />
+            ) : (
+              <MonacoEditor
+                height="320px"
+                language={codingQ.language}
+                theme="vs"
+                value={codeDraft}
+                onChange={(v) => setCodeDraft(v ?? "")}
+                onMount={() => setEditorReady(true)}
+                loading={<p className="small muted">Loading the editor…</p>}
+                options={{ fontSize: 13, minimap: { enabled: false }, scrollBeyondLastLine: false, padding: { top: 12 } }}
+              />
+            )}
           </div>
           <div className="code-actions">
             <button className="btn" onClick={submitCode} disabled={!codeDraft.trim()}>
@@ -438,10 +490,10 @@ function Live({
         </div>
       )}
 
-      {/* One visual per state: speaking = a quiet open-door hint. */}
+      {/* One visual per state: speaking = a quiet, truthful hint. */}
       {m.phase === "speaking" && !m.textMode && (
         <p className="small muted room-hint">
-          mic is live — jump in anytime
+          {m.bargeIn ? "mic is live — jump in anytime" : `${first} is speaking — your turn comes right after`}
         </p>
       )}
 
@@ -504,9 +556,9 @@ function Live({
 
       {m.latencies.length > 0 && (
         <p className="small muted mono-num latency-note">
-          Interviewer response latency: last {m.latencies[m.latencies.length - 1]} ms
+          Response time: last {m.latencies[m.latencies.length - 1]} ms
           {m.instantFlags[m.latencies.length - 1] && " · ⚡ instant"} · avg {m.avgLatencyMs} ms
-          (target ≤ 2000 ms; streaming lands next)
+          {m.fallbackFlags[m.latencies.length - 1] && " · basic voice"}
         </p>
       )}
     </section>
@@ -535,7 +587,7 @@ function Summary({ m }: { m: M }) {
 
       {/* FIRST: the verdict — score + coach summary. ScoreVerdict raises its
           own card; wrapping it in another one double-stacks the chrome. */}
-      <ScoreVerdict entries={entries} summary={s.overall.summary} />
+      <ScoreVerdict entries={entries} summary={s.overall.summary} scoring={s.scoring} />
 
       {!m.sessionPersisted && (
         <div className="card tinted notice" role="status">

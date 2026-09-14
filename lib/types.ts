@@ -39,6 +39,15 @@ export interface DeliveryMetrics {
   longestPauseMs: number;
 }
 
+/** Why a round has fewer scores than questions — so the report can say
+ * "scoring was unavailable" instead of blaming the candidate for short
+ * answers when the scoring service simply failed. */
+export interface SessionScoring {
+  status: "ok" | "partial" | "unavailable" | "too_short" | "none";
+  /** Scoring requests that failed (network / server error). */
+  failed: number;
+}
+
 export interface Session {
   _id: string;
   userId: string | null; // null = guest
@@ -52,6 +61,8 @@ export interface Session {
   metricsVersion: 1;
   latency: { perTurnMs: number[]; avgMs: number | null };
   overall: { avgScore: number | null; summary: string };
+  /** Optional so stored v1 payloads keep parsing. */
+  scoring?: SessionScoring;
   /** GD sessions only. Optional so stored v1 payloads keep parsing. */
   gdMetrics?: GdMetrics;
   /** GD sessions: the discussion topic. */

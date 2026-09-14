@@ -26,8 +26,13 @@ interface CookieSpec {
   secure: boolean;
 }
 
-// Secure only in production so the cookie still rides plain-HTTP localhost.
+// Secure in production (HTTPS), plain on localhost. A production build served
+// over plain HTTP on a LAN would silently drop every Secure cookie and nobody
+// could log in — AUTH_COOKIE_SECURE=0 opts such a deployment out explicitly.
 function secureFlag(): boolean {
+  const override = process.env.AUTH_COOKIE_SECURE;
+  if (override === "0" || override === "false") return false;
+  if (override === "1" || override === "true") return true;
   return process.env.NODE_ENV === "production";
 }
 

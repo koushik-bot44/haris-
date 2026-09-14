@@ -23,16 +23,32 @@ describe("delivery metrics", () => {
       { kind: "start", t: 0 },
       r(1000, "first part of the answer here now"),
       { kind: "restart", t: 1200 }, // engine auto-stop
-      r(8000, "second part continues"), // 7s gap — restart latency, NOT silence
-      r(9000, "and ends"),
-      { kind: "stop", t: 9500 },
+      r(8000, "second part"), // 7s gap — restart latency, NOT silence
+      r(9000, "continues"),
+      r(10000, "and ends"),
+      { kind: "stop", t: 10500 },
     ];
-    // 12 words over an 8s span minus the 7s restart gap = 1s active time;
+    // 12 words over a 9s span minus the 7s restart gap = 2s active time;
     // span >= 3000 so wpm computes over active time only.
     const m = computeDeliveryMetrics(trace, "first part of the answer here now second part continues and ends");
     expect(m.hesitationCount).toBe(0);
     expect(m.longestPauseMs).toBe(0);
-    expect(m.wpm).toBe(Math.round(12 / (1000 / 60000))); // restart gap not counted as speaking time
+    expect(m.wpm).toBe(Math.round(12 / (2000 / 60000))); // restart gap not counted as speaking time
+  });
+
+  it("segment-based transcripts (one result per utterance) never explode the WPM", () => {
+    // On-device Whisper / cloud transcription: one final per VAD segment.
+    // Two segments 8s apart with 40 words → naive math over a ~0 active window
+    // would report thousands of wpm. It must report "no signal" instead.
+    const words = Array.from({ length: 40 }, (_, i) => `w${i}`).join(" ");
+    const trace: SttTraceEvent[] = [
+      { kind: "start", t: 0 },
+      r(4000, words.slice(0, 120)),
+      r(12000, words.slice(120)),
+      { kind: "stop", t: 12500 },
+    ];
+    const m = computeDeliveryMetrics(trace, words);
+    expect(m.wpm).toBeLessThanOrEqual(400);
   });
 
   it("returns wpm 0 below ~3s of usable signal instead of extrapolating noise", () => {

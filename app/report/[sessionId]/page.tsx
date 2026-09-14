@@ -25,46 +25,72 @@ import type { Session } from "@/lib/types";
 type LoadState =
   | { kind: "loading" }
   | { kind: "missing" }
+  /** The server copy might exist but could not be fetched right now. */
+  | { kind: "unavailable" }
   | { kind: "ready"; session: Session };
 
 export default function ReportPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [state, setState] = useState<LoadState>({ kind: "loading" });
 
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const local = getSession(sessionId);
     if (local) {
       setState({ kind: "ready", session: local });
       return;
     }
-    // Not on this device — the server copy may have it. 501 means persistence
-    // is disabled server-side; every failure lands on the same not-found state.
+    // Not on this device — the server copy may have it. 404/501 mean it is
+    // genuinely not stored; a 429/5xx/network failure means "try again".
     let cancelled = false;
     (async () => {
       try {
         const res = await fetch(`/api/sessions?id=${encodeURIComponent(sessionId)}`);
+        if (res.status === 404 || res.status === 501 || res.status === 401) {
+          if (!cancelled) setState({ kind: "missing" });
+          return;
+        }
         if (!res.ok) throw new Error(String(res.status));
         const body = (await res.json()) as { session?: Session };
         if (!cancelled) {
           setState(body.session ? { kind: "ready", session: body.session } : { kind: "missing" });
         }
       } catch {
-        if (!cancelled) setState({ kind: "missing" });
+        if (!cancelled) setState({ kind: "unavailable" });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [sessionId]);
+  }, [sessionId, attempt]);
 
   if (state.kind === "loading") return null;
+
+  if (state.kind === "unavailable") {
+    return (
+      <main className="wrap">
+        <h1>Interview report</h1>
+        <section className="card panel-enter" role="status">
+          <p className="muted">This report couldn&apos;t be loaded right now — the server didn&apos;t respond.</p>
+          <div className="inline-actions">
+            <button className="btn" onClick={() => setAttempt((n) => n + 1)}>
+              Try again
+            </button>
+            <a className="btn secondary" href="/history">
+              See your history
+            </a>
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   if (state.kind === "missing") {
     return (
       <main className="wrap">
         <h1>Interview report</h1>
         <EmptyState
-          message="Can't find that round — guest reports live on the device where the interview happened. Your rounds on THIS device are all in History."
+          message="Can't find that round. Guest rounds are stored only in the browser they were recorded in (and a round that couldn't be saved is gone once its tab closes). Your rounds on THIS device are all in History."
           cta="See your history"
           href="/history"
         />
@@ -93,6 +119,7 @@ export default function ReportPage() {
       <ScoreVerdict
         entries={s.perQuestionScores}
         summary={s.overall.summary}
+        scoring={s.scoring}
         unscoredNote={
           s.roundType === "gd"
             ? "Group discussions aren't scored per question — your participation numbers are below."

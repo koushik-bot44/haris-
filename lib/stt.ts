@@ -1,16 +1,25 @@
 "use client";
 
-import {
-  initialSttState,
-  sttReduce,
-  fullTranscript,
-  type SttState,
-} from "@/lib/stt-reducer";
-import { startWhisperStt as startWhisperSttSync } from "@/lib/stt-whisper";
+import { initialSttState, sttReduce, fullTranscript, type SttState } from "@/lib/stt-reducer";
+import { startWhisperStt } from "@/lib/stt-whisper";
+import { startCloudStt } from "@/lib/stt-cloud";
+import { startDeepgramStt } from "@/lib/stt-deepgram";
 
-// Thin browser adapter around the pure reducer. All policy lives in
-// lib/stt-reducer.ts; this file only wires Chrome's SpeechRecognition events
-// into actions and executes the effects (restart / degrade).
+// Speech-to-text behind one interface. Four engines, in "auto" preference
+// order (see pickSttEngine for WHY this is the order):
+//   deepgram — live streaming recognition via a server-minted token (best;
+//              interim results, any browser) when DEEPGRAM_API_KEY is set
+//   cloud    — VAD-segmented utterances posted to /api/stt (Groq Whisper /
+//              OpenAI / Deepgram) — any browser, near-live, and by far the most
+//              accurate option on accented English
+//   chrome   — the browser's SpeechRecognition (free, interim results; Chrome
+//              and Safari, needs Google's speech service reachable)
+//   whisper  — on-device whisper-tiny.en (~40MB download), fully offline
+// "auto" picks the best one available; a degrade mid-session can swap the
+// engine for this visit only (see setSttEngineEphemeral).
+//
+// Policy for surviving Chrome's recognizer lives in lib/stt-reducer.ts; this
+// file wires events into actions and executes the effects (restart / degrade).
 
 type AnySpeechRecognition = {
   new (): SpeechRecognitionLike;
@@ -34,11 +43,9 @@ export function sttSupported(): boolean {
 }
 
 // ——— STT engine selection ———
-// "auto": Chrome's recognizer when present, on-device Whisper otherwise.
-// A network degrade (Brave/Chromium/VPN can't reach Google's speech servers)
-// flips the setting to "whisper" so voice works in ANY browser, even offline.
 const STT_ENGINE_KEY = "pds_stt_engine";
-export type SttEngine = "auto" | "chrome" | "whisper";
+export type SttEngine = "auto" | "chrome" | "whisper" | "cloud" | "deepgram";
+type ConcreteEngine = Exclude<SttEngine, "auto">;
 
 /** Session-only override (see setSttEngineEphemeral) — never persisted. */
 let ephemeralEngine: SttEngine | null = null;
@@ -48,7 +55,7 @@ export function getSttEngine(): SttEngine {
   if (typeof window === "undefined") return "auto";
   try {
     const v = window.localStorage.getItem(STT_ENGINE_KEY);
-    return v === "chrome" || v === "whisper" ? v : "auto";
+    return v === "chrome" || v === "whisper" || v === "cloud" || v === "deepgram" ? v : "auto";
   } catch {
     return "auto";
   }
@@ -62,31 +69,115 @@ export function setSttEngine(engine: SttEngine): void {
 }
 
 /** Engine switch for the CURRENT visit only (e.g. a transient network degrade
- * routes to Whisper). localStorage is untouched, so one flaky moment never
- * permanently flips the browser off Chrome's recognizer. null clears it. */
+ * routes to the cloud engine). localStorage is untouched, so one flaky moment
+ * never permanently flips the browser off Chrome's recognizer. null clears it. */
 export function setSttEngineEphemeral(engine: SttEngine | null): void {
   ephemeralEngine = engine;
 }
 
+export interface SttCapabilities {
+  /** Server transcription provider for /api/stt, or null. */
+  cloud: string | null;
+  /** Deepgram live streaming available (token endpoint configured). */
+  deepgramLive: boolean;
+}
+
+let caps: SttCapabilities | null = null;
+
+/** Ask the server which speech engines exist. Cached for the visit; safe to
+ * call repeatedly. A failed probe leaves the browser engines in charge. */
+export async function resolveSttCapabilities(): Promise<SttCapabilities> {
+  if (caps) return caps;
+  try {
+    const res = await fetch("/api/stt", { cache: "no-store" });
+    if (!res.ok) throw new Error(`stt_${res.status}`);
+    const d = (await res.json()) as Partial<SttCapabilities>;
+    caps = { cloud: d.cloud ?? null, deepgramLive: Boolean(d.deepgramLive) };
+  } catch {
+    caps = { cloud: null, deepgramLive: false };
+  }
+  return caps;
+}
+
+export function sttCapabilities(): SttCapabilities | null {
+  return caps;
+}
+
+/** The engine startStt will actually use right now.
+ *
+ * Accuracy order, not availability order. The server's Whisper path ("cloud")
+ * now outranks Chrome's recognizer whenever the server reports a provider,
+ * because on this project's actual users Chrome is the weak link: it mangles
+ * Indian-accented English (a stored session reads "Expo hi myself Kaushik I am
+ * building not Expo" for "Hi, myself Koushik, I am building an app"), it exists
+ * only in Chrome/Safari, it needs Google's speech service reachable, and it
+ * stops itself after ~60 seconds. Groq's whisper-large-v3-turbo transcribes the
+ * same audio correctly, works in every browser, and the free tier is 2000
+ * requests/day — an interview spends a few dozen. Chrome stays as the fallback
+ * for a server with no transcription key configured. */
+export function pickSttEngine(): ConcreteEngine {
+  const e = getSttEngine();
+  if (e !== "auto") return e;
+  if (caps?.deepgramLive) return "deepgram";
+  if (caps?.cloud) return "cloud";
+  if (sttSupported()) return "chrome";
+  return "whisper";
+}
+
+/** The engine to fall back to when `failed` degrades mid-session, or null when
+ * nothing else is left. Same accuracy order as pickSttEngine, minus whatever
+ * just broke — routing a cloud outage back to the cloud is an infinite loop. */
+export function nextSttEngine(failed: ConcreteEngine): ConcreteEngine | null {
+  const chain: ConcreteEngine[] = [];
+  if (caps?.deepgramLive) chain.push("deepgram");
+  if (caps?.cloud) chain.push("cloud");
+  if (sttSupported()) chain.push("chrome");
+  chain.push("whisper");
+  return chain.find((c) => c !== failed) ?? null;
+}
+
 export interface SttSession {
   stop(): SttState;
-  /** Stop, then wait for Chrome to finalize buffered audio (it delivers the
-   * last final result AFTER recognition.stop()) and return the settled state.
-   * Reading the transcript synchronously at stop() drops the final words. */
+  /** Stop, then wait for the engine to finalize buffered audio (Chrome
+   * delivers the last final result AFTER recognition.stop()) and return the
+   * settled state. Reading the transcript synchronously at stop() drops the
+   * final words. */
   stopAndSettle(settleMs?: number): Promise<SttState>;
   getState(): SttState;
 }
 
-export function startStt(callbacks: {
+export interface SttCallbacks {
   onUpdate: (state: SttState) => void;
   onDegrade: (reason: string) => void;
-}): SttSession | null {
-  const engine = getSttEngine();
-  if (engine === "whisper" || (engine === "auto" && !sttSupported())) {
-    // Dynamic import keeps the transformers stack out of the main bundle;
-    // startWhisperStt itself degrades if the model isn't ready yet.
-    return startWhisperSttSync(callbacks);
+}
+
+export function startStt(callbacks: SttCallbacks): SttSession | null {
+  switch (pickSttEngine()) {
+    case "deepgram": {
+      // If the live socket cannot be opened, fall through to the next best
+      // engine for this session WITHOUT bothering the caller.
+      const next = (): SttSession | null => {
+        if (caps?.cloud) return startCloudStt(callbacks);
+        if (sttSupported()) return startChromeStt(callbacks);
+        return startWhisperStt(callbacks);
+      };
+      return startDeepgramStt(callbacks, next);
+    }
+    case "cloud":
+      return startCloudStt(callbacks);
+    case "whisper":
+      return startWhisperStt(callbacks);
+    case "chrome":
+    default:
+      if (!sttSupported()) {
+        callbacks.onDegrade("unsupported");
+        return null;
+      }
+      return startChromeStt(callbacks);
   }
+}
+
+export function startChromeStt(callbacks: SttCallbacks): SttSession | null {
   if (!sttSupported()) {
     callbacks.onDegrade("unsupported");
     return null;
@@ -123,7 +214,7 @@ export function startStt(callbacks: {
     const r = new Ctor();
     r.continuous = true;
     r.interimResults = true;
-    r.lang = "en-IN";
+    r.lang = process.env.NEXT_PUBLIC_STT_LANG || "en-IN";
     r.onresult = (e) => {
       // Only the newest results matter; earlier indices were already dispatched.
       for (let i = e.resultIndex; i < e.results.length; i++) {

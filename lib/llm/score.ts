@@ -1,15 +1,4 @@
-import { cliAllowed, runClaude } from "@/lib/llm/cli-runner";
-import { groqComplete, groqEnabled } from "@/lib/llm/groq";
-
-// Production path: Groq whenever its key exists; dev keeps the CLI when it is
-// the selected provider. Heuristics remain the always-on rescue.
-function llmTextAvailable(): boolean {
-  return groqEnabled() || (cliAllowed() && (process.env.LLM_PROVIDER ?? "mock") === "claude-cli");
-}
-function llmText(prompt: string, timeoutMs: number): Promise<string> {
-  return groqEnabled() ? groqComplete(prompt, { maxTokens: 900 }) : runClaude(prompt, timeoutMs, "sonnet");
-}
-
+import { llmSource, llmText, llmTextAvailable, type LlmSource } from "@/lib/llm/complete";
 import { isScoreable, rubricResponseSchema, toRubricEntry, type RubricResponse } from "@/lib/rubric";
 import type { RubricEntry } from "@/lib/types";
 
@@ -79,7 +68,7 @@ export async function scoreAnswer(
   questionId: number,
   question: string,
   answer: string,
-): Promise<{ entry: RubricEntry; scorer: "claude-cli" | "heuristic" } | typeof TOO_SHORT> {
+): Promise<{ entry: RubricEntry; scorer: LlmSource } | typeof TOO_SHORT> {
   if (!isScoreable(answer)) return TOO_SHORT;
 
   if (llmTextAvailable()) {
@@ -87,11 +76,12 @@ export async function scoreAnswer(
     // hold up the interview (scoring runs in the background per the plan).
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        // Background path — latency doesn't matter, quality does: sonnet.
-        const raw = await llmText(buildScoringPrompt(question, answer), 45_000);
+        // Background path — latency doesn't matter, quality does.
+        const raw = await llmText(buildScoringPrompt(question, answer), { maxTokens: 900, temperature: 0.2 });
         const resp = parseRubric(raw);
-        if (resp) return { entry: toRubricEntry(questionId, question, answer, resp), scorer: "claude-cli" };
-      } catch {
+        if (resp) return { entry: toRubricEntry(questionId, question, answer, resp), scorer: llmSource() };
+      } catch (err) {
+        console.warn("[score] model scoring failed, using heuristic:", err instanceof Error ? err.message : err);
         break;
       }
     }

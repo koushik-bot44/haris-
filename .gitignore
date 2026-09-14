@@ -10,3 +10,4 @@ coverage/
 .gstack/
 .context/
 .data/
+.vercel

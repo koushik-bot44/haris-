@@ -2,8 +2,24 @@ import { describe, expect, it } from "vitest";
 import { stripSpeechTags, TURBO_TAGS } from "@/lib/speakable";
 
 describe("speakable tag stripping (captions/transcripts never show raw tags)", () => {
-  it("exposes exactly the four Chatterbox-Turbo tags", () => {
-    expect(TURBO_TAGS).toEqual(["[chuckle]", "[sigh]", "[clear throat]", "[gasp]"]);
+  // The list must match Chatterbox-Turbo's supported set exactly. Anything the
+  // model can emit but this list omits survives stripSpeechTags (unknown
+  // brackets are preserved on purpose) and a cloud engine then SAYS it —
+  // "[laugh]" read aloud as the word "laugh".
+  it("covers the full Chatterbox-Turbo tag set", () => {
+    expect([...TURBO_TAGS].sort()).toEqual(
+      [
+        "[chuckle]",
+        "[clear throat]",
+        "[cough]",
+        "[gasp]",
+        "[groan]",
+        "[laugh]",
+        "[shush]",
+        "[sigh]",
+        "[sniff]",
+      ].sort(),
+    );
   });
 
   it("strips a tag at the start without leaving leading whitespace", () => {

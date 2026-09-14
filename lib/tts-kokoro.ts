@@ -1,29 +1,89 @@
 "use client";
 
-// Kokoro-82M on-device TTS — the plan's M0 "premium voice" path, ₹0 forever:
-// the model downloads once (~80–90MB, cached by the browser), then all speech
-// is generated locally (WebGPU when available, WASM otherwise). Dramatically
-// better voices than speechSynthesis — af_heart for Priya, distinct voices per
-// GD persona later. Hybrid rule: while the model is still downloading, the
-// system voice speaks; Kokoro takes over seamlessly once ready.
+// Kokoro-82M on-device TTS — the natural voice that costs nothing: the model
+// downloads once (cached by the browser), then all speech is generated
+// locally. WebGPU when a usable adapter exists, WASM otherwise — and a WebGPU
+// load that fails falls back to WASM instead of leaving the candidate with the
+// system voice for the rest of the session.
+//
+// The download is NOT hidden behind the system voice any more. A real-browser
+// run (2026-08-25, fresh profile) measured why: the model took ~50 s to arrive,
+// the 8 s hold in lib/tts.ts expired, and the greeting plus the whole second
+// turn were spoken by the robotic system voice before Kokoro took over — a
+// first-time visitor's "the interviewer has two voices". The interview now
+// waits in the preroll, with this module's progress on screen, until the
+// voice is ready (hooks/useInterviewMachine.ts voiceWarmup).
 
 import { tapPlayback } from "@/lib/audio-viz";
 
 type KokoroModel = {
   generate(text: string, opts: { voice: string }): Promise<{ audio: Float32Array; sampling_rate: number }>;
 };
+type ProgressEvent = { status?: string; file?: string; progress?: number; loaded?: number; total?: number };
+type KokoroCtor = {
+  from_pretrained(
+    id: string,
+    opts: { dtype: string; device: string; progress_callback?: (e: ProgressEvent) => void },
+  ): Promise<unknown>;
+};
 
 export type KokoroStatus = "off" | "loading" | "ready" | "failed";
+type Device = "webgpu" | "wasm";
 
 let status: KokoroStatus = "off";
 let model: KokoroModel | null = null;
 let loadPromise: Promise<void> | null = null;
 let audioCtx: AudioContext | null = null;
+/** Bytes seen per file during the download — the model is several files. */
+const fileProgress = new Map<string, { loaded: number; total: number }>();
 
 export const PRIYA_VOICE = "af_heart";
+const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
 
 export function kokoroStatus(): KokoroStatus {
   return status;
+}
+
+/** Download progress 0–100 while loading (null before the first byte and
+ * after the model is ready) — for the preroll's "preparing the voice" line. */
+export function kokoroProgress(): number | null {
+  if (status !== "loading" || fileProgress.size === 0) return null;
+  let loaded = 0;
+  let total = 0;
+  for (const f of fileProgress.values()) {
+    loaded += f.loaded;
+    total += f.total;
+  }
+  return total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : null;
+}
+
+/** WebGPU is only worth trying when an adapter actually exists — `navigator.gpu`
+ * being present says nothing about that (headless, blocked, software GL). */
+async function pickDevice(): Promise<Device> {
+  const nav = navigator as Navigator & { gpu?: { requestAdapter?: () => Promise<unknown> } };
+  if (!nav.gpu?.requestAdapter) return "wasm";
+  try {
+    const adapter = await nav.gpu.requestAdapter();
+    return adapter ? "webgpu" : "wasm";
+  } catch {
+    return "wasm";
+  }
+}
+
+async function load(Kokoro: KokoroCtor, device: Device): Promise<KokoroModel> {
+  // WASM gets q8 (~90 MB, what the model card recommends); WebGPU gets fp32
+  // (~330 MB — measured 325,532,232 bytes) because the quantized graph is
+  // known to produce noise on WebGPU. Both are a one-time download the
+  // browser caches; the preroll shows the progress instead of hiding it.
+  fileProgress.clear();
+  return (await Kokoro.from_pretrained(MODEL_ID, {
+    dtype: device === "webgpu" ? "fp32" : "q8",
+    device,
+    progress_callback: (e) => {
+      if (!e?.file || typeof e.loaded !== "number" || typeof e.total !== "number") return;
+      fileProgress.set(e.file, { loaded: e.loaded, total: e.total });
+    },
+  })) as KokoroModel;
 }
 
 export function ensureKokoroLoading(): void {
@@ -31,24 +91,58 @@ export function ensureKokoroLoading(): void {
   status = "loading";
   loadPromise = (async () => {
     try {
-      const { KokoroTTS } = await import("kokoro-js");
-      const nav = navigator as Navigator & { gpu?: unknown };
-      const device = nav.gpu ? "webgpu" : "wasm";
-      model = (await KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
-        dtype: device === "webgpu" ? "fp32" : "q8",
-        device,
-      })) as unknown as KokoroModel;
+      const { KokoroTTS } = (await import("kokoro-js")) as unknown as { KokoroTTS: KokoroCtor };
+      const device = await pickDevice();
+      try {
+        model = await load(KokoroTTS, device);
+      } catch (err) {
+        if (device !== "webgpu") throw err;
+        console.warn("[kokoro] WebGPU load failed, retrying on WASM:", err instanceof Error ? err.message : err);
+        model = await load(KokoroTTS, "wasm");
+      }
+      // Warm the graph before the first real line. The first generate() pays
+      // a one-time cost (ONNX session init, WebGPU shader compile) that a
+      // real-browser run measured as 5.4 s to the greeting's first syllable
+      // against 2.3–3.7 s for every later turn. Spending it here, while the
+      // candidate is still reading the preroll, means the interview opens at
+      // the steady-state latency. The result is discarded; failure is
+      // harmless (the real line would pay the same cost, as before).
+      try {
+        await model.generate("Hello.", { voice: PRIYA_VOICE });
+      } catch {}
       status = "ready";
-    } catch {
+    } catch (err) {
+      console.warn("[kokoro] on-device voice unavailable:", err instanceof Error ? err.message : err);
       status = "failed";
       model = null;
+      loadPromise = null; // a later ensureKokoroLoading() may retry
     }
   })();
 }
 
 function ctx(): AudioContext {
   if (!audioCtx) audioCtx = new AudioContext();
+  if (audioCtx.state === "suspended") void audioCtx.resume();
   return audioCtx;
+}
+
+/** Resolve once the model can actually speak, or false when it failed or the
+ * wait ran out. Callers hold a line for this instead of speaking THAT line in
+ * a different voice: a mid-reply engine switch is the "multiple voices" bug. */
+export function kokoroReady(timeoutMs: number): Promise<boolean> {
+  if (status === "ready") return Promise.resolve(true);
+  if (typeof window === "undefined") return Promise.resolve(false);
+  ensureKokoroLoading();
+  if (status === "failed") return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const tick = () => {
+      if (status === "ready") return resolve(true);
+      if (status === "failed" || Date.now() - startedAt >= timeoutMs) return resolve(false);
+      setTimeout(tick, 120);
+    };
+    tick();
+  });
 }
 
 export interface KokoroHandle {
@@ -76,7 +170,13 @@ export function kokoroSpeak(chunks: string[], voice: string): KokoroHandle {
       const src = c.createBufferSource();
       src.buffer = buf;
       tapPlayback(c, src); // orb rides the real playback amplitude
-      src.onended = () => resolve();
+      // Watchdog: a suspended context never fires onended — the interview
+      // must not hang on it.
+      const guard = setTimeout(resolve, buf.duration * 1000 + 1500);
+      src.onended = () => {
+        clearTimeout(guard);
+        resolve();
+      };
       currentSource = src;
       src.start();
     });
@@ -95,6 +195,7 @@ export function kokoroSpeak(chunks: string[], voice: string): KokoroHandle {
         break; // one failed chunk must not hang the interview
       }
       next = i + 1 < chunks.length ? gen(chunks[i + 1]) : null;
+      next?.catch(() => {}); // a rejected look-ahead is re-awaited on its turn
       if (cancelled) break;
       if (first) {
         first = false;

@@ -14,12 +14,28 @@ import type { Session } from "@/lib/types";
 const postBodySchema = z.object({ session: sessionSchema });
 
 const LIST_LIMIT = 100;
+/** A full session with a 200-turn transcript is well under this. */
+const MAX_BODY_BYTES = 512 * 1024;
 let indexEnsured = false;
 
 export async function POST(req: Request) {
+  // Persistence disabled → 501 before anything else (pinned contract).
+  if (!dbEnabled()) {
+    return NextResponse.json({ persisted: false, reason: "disabled" }, { status: 501 });
+  }
+  // Guests never legitimately reach this endpoint (the client only mirrors
+  // when signed in), so an anonymous write is either a stale cookie or abuse:
+  // refuse before parsing, and never let an unbounded body into Mongo.
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: "sign in to save sessions" }, { status: 401 });
+  const declared = Number(req.headers.get("content-length") ?? 0);
+  if (declared > MAX_BODY_BYTES) return NextResponse.json({ error: "session too large" }, { status: 413 });
+
   let body: unknown;
   try {
-    body = await req.json();
+    const raw = await req.text();
+    if (raw.length > MAX_BODY_BYTES) return NextResponse.json({ error: "session too large" }, { status: 413 });
+    body = JSON.parse(raw);
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
@@ -40,7 +56,6 @@ export async function POST(req: Request) {
   if (!db) return NextResponse.json({ persisted: false, reason: "disabled" }, { status: 501 });
 
   // Stamp ownership server-side — the client-sent userId is never trusted.
-  const { userId } = await auth();
   const session: Session = { ...toSession(parsed.data.session), userId };
 
   try {

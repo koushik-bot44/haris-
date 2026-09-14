@@ -88,7 +88,7 @@ export default function HistoryPage() {
                           key={i}
                           aria-hidden
                           className="r-dot"
-                          title={`Q${i + 1}: ${d}/5`}
+                          title={`Scored answer ${i + 1}: ${d}/5`}
                           style={{ background: "var(--text)", opacity: dotOpacity(d) }}
                         />
                       ))}

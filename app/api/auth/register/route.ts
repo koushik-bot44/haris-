@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { createUser, EmailTakenError, InvalidInputError } from "@/lib/user-store";
+import { createUser, EmailTakenError, InvalidInputError, StorageUnavailableError } from "@/lib/user-store";
 import { signSession } from "@/lib/session-jwt";
 import { authMarkerCookie, sessionCookie } from "@/lib/auth";
 
@@ -48,6 +48,13 @@ export async function POST(req: Request) {
     if (err instanceof InvalidInputError) {
       return NextResponse.json({ error: err.message }, { status: 400 });
     }
+    if (err instanceof StorageUnavailableError) {
+      return NextResponse.json(
+        { error: "Accounts aren't available on this deployment yet — you can practise as a guest." },
+        { status: 503 },
+      );
+    }
+    console.error("[auth] register failed:", err instanceof Error ? err.message : err);
     return NextResponse.json({ error: "could not create your account" }, { status: 503 });
   }
 }

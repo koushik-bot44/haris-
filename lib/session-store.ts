@@ -2,14 +2,15 @@
 
 import type { Session } from "@/lib/types";
 
-// Guest persistence — localStorage with the same schema Mongo gets in M3, so
-// the platform milestone is a storage swap, not a rewrite. Private-browsing
-// mode (no localStorage) degrades to in-memory per the error registry.
+// Guest persistence — localStorage with the same schema Mongo gets, so the
+// platform milestone is a storage swap, not a rewrite. Private-browsing mode
+// (no localStorage) degrades to in-memory per the error registry.
 
 const KEY = "pds_sessions_v1";
-// Unbounded transcripts eventually blow the ~5MB quota and permanently
-// degrade saves to memory-only — keep only the most recent rounds.
+// Unbounded transcripts eventually blow the ~5MB quota — keep only the most
+// recent rounds, and shrink further when a write still does not fit.
 const MAX_STORED_SESSIONS = 100;
+const MIN_STORED_SESSIONS = 5;
 const memoryFallback: Session[] = [];
 
 function storageAvailable(): boolean {
@@ -23,16 +24,56 @@ function storageAvailable(): boolean {
   }
 }
 
+const ROUND_TYPES = new Set(["hr", "technical", "gd"]);
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function isTurnLike(v: unknown): boolean {
+  return isRecord(v) && typeof v.speaker === "string" && typeof v.text === "string" && typeof v.tStart === "number" && typeof v.tEnd === "number";
+}
+
+function isScoresLike(v: unknown): boolean {
+  return (
+    isRecord(v) &&
+    ["relevance", "structure", "depth", "communication"].every((k) => typeof v[k] === "number" && Number.isFinite(v[k] as number))
+  );
+}
+
+function isRubricEntryLike(v: unknown): boolean {
+  return (
+    isRecord(v) &&
+    typeof v.questionId === "number" &&
+    typeof v.question === "string" &&
+    typeof v.answerTranscript === "string" &&
+    isScoresLike(v.scores) &&
+    isRecord(v.evidence ?? {}) &&
+    isRecord(v.tips ?? {})
+  );
+}
+
 // Stored payloads are user-editable JSON — entries missing the load-bearing
-// fields are dropped rather than crashing every reporting view.
+// fields (or with malformed nested shapes every report view dereferences) are
+// dropped rather than crashing every reporting page.
 function isSessionLike(value: unknown): value is Session {
-  if (typeof value !== "object" || value === null) return false;
-  const s = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const s = value;
   return (
     typeof s._id === "string" &&
     typeof s.startedAt === "number" &&
+    typeof s.role === "string" &&
+    typeof s.roundType === "string" &&
+    ROUND_TYPES.has(s.roundType) &&
     Array.isArray(s.turns) &&
-    Array.isArray(s.perQuestionScores)
+    s.turns.every(isTurnLike) &&
+    Array.isArray(s.perQuestionScores) &&
+    s.perQuestionScores.every(isRubricEntryLike) &&
+    (s.deliveryMetrics === null || s.deliveryMetrics === undefined || isRecord(s.deliveryMetrics)) &&
+    isRecord(s.overall) &&
+    typeof s.overall.summary === "string" &&
+    isRecord(s.latency) &&
+    Array.isArray(s.latency.perTurnMs)
   );
 }
 
@@ -70,6 +111,16 @@ function postSession(session: Session): void {
   }
 }
 
+function readStored(): Session[] {
+  try {
+    const raw = window.localStorage.getItem(KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(parsed) ? parsed.filter(isSessionLike) : [];
+  } catch {
+    return [];
+  }
+}
+
 export function saveSession(session: Session): { persisted: boolean } {
   if (typeof window === "undefined") return { persisted: false };
   postSession(session);
@@ -77,26 +128,32 @@ export function saveSession(session: Session): { persisted: boolean } {
     memoryFallback.push(session);
     return { persisted: false };
   }
-  try {
-    const all = loadSessions();
-    all.push(session);
-    window.localStorage.setItem(KEY, JSON.stringify(all.slice(-MAX_STORED_SESSIONS)));
-    return { persisted: true };
-  } catch {
-    memoryFallback.push(session);
-    return { persisted: false };
+  // Shrink-and-retry: a quota failure drops the oldest rounds until the new
+  // one fits (down to a small floor) instead of permanently degrading every
+  // later save to memory-only.
+  let keep = [...readStored(), session].slice(-MAX_STORED_SESSIONS);
+  for (;;) {
+    try {
+      window.localStorage.setItem(KEY, JSON.stringify(keep));
+      return { persisted: true };
+    } catch {
+      if (keep.length <= MIN_STORED_SESSIONS) break;
+      keep = keep.slice(1);
+    }
   }
+  memoryFallback.push(session);
+  return { persisted: false };
 }
 
+/** Every round visible on this device: stored rounds plus any that only made
+ * it to memory this tab (storage full/blocked), so History and the summary
+ * page agree with the round the user just finished. */
 export function loadSessions(): Session[] {
   if (typeof window === "undefined" || !storageAvailable()) return [...memoryFallback];
-  try {
-    const raw = window.localStorage.getItem(KEY);
-    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
-    return Array.isArray(parsed) ? parsed.filter(isSessionLike) : [];
-  } catch {
-    return [...memoryFallback];
-  }
+  const stored = readStored();
+  const ids = new Set(stored.map((s) => s._id));
+  const extra = memoryFallback.filter((s) => !ids.has(s._id));
+  return extra.length ? [...stored, ...extra] : stored;
 }
 
 export function getSession(id: string): Session | null {

@@ -145,3 +145,58 @@ describe("buildResumeProfile — edges", () => {
     expect(buildResumeProfile(FRESHER_RESUME)).toEqual(buildResumeProfile(FRESHER_RESUME));
   });
 });
+
+describe("buildResumeProfile — heuristics that used to misfire", () => {
+  it("'Computer Science and Engineering' plus a summary section never flips a fresher to experienced", () => {
+    const p = buildResumeProfile(
+      "Anil Kumar\nSUMMARY\nFinal-year student of Computer Science and Engineering who wants to work on backend systems.\nEDUCATION\nB.Tech, Computer Science and Engineering, VIT, 2021-2025\nSKILLS\nJava",
+    );
+    expect(p.experienced).toBe(false);
+    expect(p.companies).toEqual([]);
+  });
+
+  it("a date-only line under an internship entry is still an internship", () => {
+    const p = buildResumeProfile(
+      "Priya Nair\nEXPERIENCE\nSoftware Engineering Intern, Zoho\nMay 2023 - Jul 2024\n- Built dashboards\nEDUCATION\nB.Tech, Anna University, 2021-2025",
+    );
+    expect(p.experienced).toBe(false);
+    expect(p.yearsOfExperience).toBeUndefined();
+    expect(p.companies).toEqual(["Zoho"]);
+  });
+
+  it("counts month-qualified ranges ('Jun 2022 – Dec 2023')", () => {
+    const p = buildResumeProfile("Rahul Verma\nWORK EXPERIENCE\nSoftware Engineer, Acme Solutions\nJun 2022 – Dec 2023\n- Built APIs\nEDUCATION\nB.Tech, NIT, 2018-2022");
+    expect(p.experienced).toBe(true);
+    expect(p.yearsOfExperience).toBe(2); // 1.5 years, rounded
+  });
+
+  it("never mistakes a location for the employer", () => {
+    const p = buildResumeProfile("Rahul Verma\nEXPERIENCE\nSoftware Engineer, Bangalore, Acme Solutions, 2021 - 2023\nEDUCATION\nB.Tech, 2017-2021");
+    expect(p.companies).toEqual(["Acme Solutions"]);
+  });
+
+  it("does not compliment a version number or a metadata line as a metric", () => {
+    const p = buildResumeProfile(
+      "Sai Gogineni\nPROJECTS\nPortfolio Site\n- Built with HTML5 and CSS3\nDuration: 3 months\nTech stack: React, Node.js\n",
+    );
+    expect(p.highlight).toBe("Portfolio Site");
+    expect(p.projects.map((x) => x.name)).toEqual(["Portfolio Site"]);
+  });
+
+  it("dedupes duplicate project names and reads numbered headings as projects", () => {
+    const p = buildResumeProfile("Sai Gogineni\nPROJECTS\n1. Campus Cart\n- Grocery app\n2. Campus Cart\n- Same app again\n3. Chat App\n- Realtime chat");
+    expect(p.projects.map((x) => x.name)).toEqual(["Campus Cart", "Chat App"]);
+  });
+
+  it("a job-title headline is not the candidate's name", () => {
+    expect(buildResumeProfile("Software Engineer\nRahul Verma\nSKILLS\nJava").name).toBeUndefined();
+    expect(buildResumeProfile("Professional Summary\nRahul Verma\nSKILLS\nJava").name).toBeUndefined();
+  });
+
+  it("'Spring 2024' is a season, not Spring Boot", () => {
+    const p = buildResumeProfile("Anil Kumar\nEDUCATION\nDean's list, Spring 2024 semester\nSKILLS\nJava, Spring Boot");
+    expect(p.skills).toContain("Spring Boot");
+    const q = buildResumeProfile("Anil Kumar\nEDUCATION\nDean's list, Spring 2024 semester\nSKILLS\nJava");
+    expect(q.skills).not.toContain("Spring Boot");
+  });
+});

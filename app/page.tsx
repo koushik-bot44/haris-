@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } fro
 import { useRouter } from "next/navigation";
 import { extractPdfText, ResumeExtractError } from "@/lib/resume-extract";
 import { buildResumeProfile } from "@/lib/resume-profile";
-import { setVoiceEngine } from "@/lib/tts";
+import { resolveVoiceEngine } from "@/lib/tts";
 import { setPreferredVoice } from "@/lib/voices";
 import type { CodeLanguage } from "@/lib/types";
 import { Hero } from "@/components/Hero";
@@ -63,7 +63,12 @@ export default function SetupPage() {
   const [role, setRole] = useState("general");
   const [round, setRound] = useState<Round>("hr");
   const [codeLang, setCodeLang] = useState<CodeLanguage>("java");
-  const [bargeIn, setBargeIn] = useState(false);
+  // ON by default, matching the interview room's own default and the preroll
+  // copy. This used to be `false` — and because the value is written to
+  // sessionStorage on Start, every candidate who came through this page had
+  // interruption silently switched OFF, undoing the room's default for the
+  // normal path in. Found by looking at a screenshot of this page.
+  const [bargeIn, setBargeIn] = useState(true);
   const [resume, setResume] = useState("");
   const [analysis, setAnalysis] = useState<{
     strengths: string[];
@@ -143,12 +148,20 @@ export default function SetupPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ resume: textOverride ?? resume }),
       });
-      const d = await res.json();
-      // 429s carry a friendly d.message (quota text) — prefer it over the
-      // machine code in d.error.
-      if (!res.ok) throw new Error((typeof d.message === "string" && d.message) || d.error || "analysis failed");
-      setAnalysis(d.analysis);
-      setAnalyzer(d.analyzer);
+      // A non-JSON error body (proxy page, timeout) must not surface as a raw
+      // SyntaxError. 429s carry a friendly d.message (quota text) — prefer it
+      // over the machine code in d.error.
+      const d = (await res.json().catch(() => ({}))) as { analysis?: unknown; analyzer?: unknown; message?: unknown; error?: unknown };
+      if (!res.ok) {
+        throw new Error(
+          (typeof d.message === "string" && d.message) ||
+            (typeof d.error === "string" && d.error) ||
+            "Analysis is unavailable right now — you can still start the interview.",
+        );
+      }
+      if (!d.analysis) throw new Error("Analysis is unavailable right now — you can still start the interview.");
+      setAnalysis(d.analysis as typeof analysis);
+      setAnalyzer(typeof d.analyzer === "string" ? d.analyzer : null);
     } catch (e) {
       setAnalyzeError(e instanceof Error ? e.message : "analysis failed");
     } finally {
@@ -157,13 +170,12 @@ export default function SetupPage() {
   };
 
   useEffect(() => {
-    // One voice — Emily. Studio-quality when the local voice server is up,
-    // otherwise the fast on-device voice fills in silently. No picker.
+    // One interviewer voice per round; the ENGINE is chosen by what the server
+    // has configured — a cloud voice when a key exists, the local studio
+    // server when it is running, else the on-device voice (warmed now so it
+    // is ready by the first question). No picker.
     setPreferredVoice("Emily.wav");
-    fetch("/api/tts")
-      .then((r) => r.json())
-      .then((d) => setVoiceEngine(d.chatterbox ? "chatterbox" : "kokoro"))
-      .catch(() => setVoiceEngine("kokoro"));
+    void resolveVoiceEngine();
     // Restore a previously chosen coding language (set in-effect, not in the
     // initializer — sessionStorage reads during SSR/hydration would mismatch).
     try {
@@ -218,8 +230,8 @@ export default function SetupPage() {
         <div className="section-head">
           <h2 className="section-title">Set up your session</h2>
           <p className="section-sub">
-            Pick a round, add a few details, and start talking. It takes under a minute — no login,
-            nothing uploaded.
+            Pick a round, add a few details, and start talking. It takes under a minute — no login
+            needed.
           </p>
         </div>
 
@@ -303,11 +315,12 @@ export default function SetupPage() {
                     value={resume}
                     maxLength={15000}
                     onChange={(e) => onResumeChange(e.target.value)}
-                    placeholder="Paste resume text here, or upload the PDF below. It stays in this browser session."
+                    placeholder="Paste resume text here, or upload the PDF below."
                   />
                   <span className="hint">
-                    PDFs are read entirely in this browser — the file never leaves your device; only the
-                    extracted text is used. Still, avoid sensitive personal data (phone, address).
+                    PDFs are read entirely in this browser — the file itself never leaves your device. The
+                    extracted text is sent to the AI to personalise your questions and analysis, so leave
+                    out sensitive personal data (phone, address).
                   </span>
                 </div>
                 <div className="inline-actions">
@@ -373,8 +386,9 @@ export default function SetupPage() {
                 <span>
                   <span className="toggle-title">Let me interrupt the interviewer</span>
                   <span className="choice-desc">
-                    Off by default — she finishes each question, then you answer. Turn on only with headphones,
-                    or room noise will cut her off mid-question.
+                    On by default — just start talking and the interviewer stops and listens, like a real
+                    conversation. Turn it off in a noisy room or on a shared desk, where someone else talking is
+                    what would cut a question short.
                   </span>
                 </span>
               </label>
@@ -385,8 +399,9 @@ export default function SetupPage() {
                 {round === "hr" ? "Start HR interview" : round === "technical" ? "Start technical interview" : "Start group discussion"}
               </button>
               <p className="small muted start-note">
-                Voice interviews need Chrome on a laptop with a microphone. No login, nothing uploaded — your
-                session stays on this device.
+                Voice interviews work best in Chrome on a laptop with a microphone. No login needed — your
+                answers go to the AI to generate questions and scores, and your results stay on this device
+                unless you sign in.
               </p>
             </div>
           </div>

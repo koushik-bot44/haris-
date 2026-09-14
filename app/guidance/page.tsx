@@ -17,7 +17,8 @@ const ROLES: readonly RolePreset[] = ["general", "java-sde-fresher", "frontend-f
 
 interface GuidanceResult {
   guidance: Guidance;
-  source: "claude-cli" | "heuristic";
+  /** The brain that produced it — "heuristic" means the curated fallback. */
+  source: string;
 }
 
 interface Inputs {
@@ -56,7 +57,7 @@ function readCache(key: string): GuidanceResult | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { key?: unknown; guidance?: unknown; source?: unknown };
     if (parsed.key !== key || !isGuidanceLike(parsed.guidance)) return null;
-    return { guidance: parsed.guidance, source: parsed.source === "claude-cli" ? "claude-cli" : "heuristic" };
+    return { guidance: parsed.guidance, source: typeof parsed.source === "string" ? parsed.source : "heuristic" };
   } catch {
     return null;
   }
@@ -123,15 +124,27 @@ export default function GuidancePage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(i),
       });
-      const d = (await res.json()) as { guidance?: unknown; source?: unknown; error?: unknown; message?: unknown };
+      // A non-JSON body (proxy error page, timeout HTML) must read as a
+      // friendly failure, not a raw SyntaxError on screen.
+      const d = (await res.json().catch(() => ({}))) as {
+        guidance?: unknown;
+        source?: unknown;
+        error?: unknown;
+        message?: unknown;
+      };
       if (!res.ok) {
-        const msg = typeof d.message === "string" ? d.message : typeof d.error === "string" ? d.error : "guidance failed";
+        const msg =
+          typeof d.message === "string"
+            ? d.message
+            : typeof d.error === "string"
+              ? d.error
+              : "the guidance service didn't respond";
         throw new Error(msg);
       }
-      if (!isGuidanceLike(d.guidance)) throw new Error("guidance failed");
+      if (!isGuidanceLike(d.guidance)) throw new Error("the guidance service returned an unexpected reply");
       const r: GuidanceResult = {
         guidance: d.guidance,
-        source: d.source === "claude-cli" ? "claude-cli" : "heuristic",
+        source: typeof d.source === "string" ? d.source : "heuristic",
       };
       setResult(r);
       writeCache(keyFor(i), r);
@@ -195,8 +208,8 @@ export default function GuidancePage() {
           <section className="r-section">
             <h2>Close these gaps first</h2>
             <div className="r-gaps">
-              {g.skillGaps.map((s) => (
-                <span className="chip wrap" key={s}>
+              {g.skillGaps.map((s, i) => (
+                <span className="chip wrap" key={`${i}-${s}`}>
                   {s}
                 </span>
               ))}
@@ -213,7 +226,7 @@ export default function GuidancePage() {
             <h2>Learning path</h2>
             <ol className="r-path">
               {g.learningPath.map((step, i) => (
-                <li className="r-step" key={step.skill}>
+                <li className="r-step" key={`${i}-${step.skill}`}>
                   <span className="r-step-num" aria-hidden>
                     {i + 1}
                   </span>
@@ -232,8 +245,8 @@ export default function GuidancePage() {
           <section className="r-section">
             <h2>Certifications worth having</h2>
             <ul className="r-certs">
-              {g.certifications.map((c) => (
-                <li key={c}>{c}</li>
+              {g.certifications.map((c, i) => (
+                <li key={`${i}-${c}`}>{c}</li>
               ))}
             </ul>
           </section>
@@ -241,13 +254,13 @@ export default function GuidancePage() {
           <section className="r-section">
             <h2>Roles that fit you</h2>
             <div className="r-roles">
-              {g.roles.map((r) => (
-                <div className="card" key={r.title}>
+              {g.roles.map((r, i) => (
+                <div className="card" key={`${i}-${r.title}`}>
                   <div className="r-role-title">{r.title}</div>
                   <p className="r-role-why">{r.why}</p>
                   <div className="r-role-companies">
-                    {r.companies.map((c) => (
-                      <span className="chip" key={c}>
+                    {r.companies.map((c, j) => (
+                      <span className="chip" key={`${j}-${c}`}>
                         {c}
                       </span>
                     ))}
@@ -259,10 +272,15 @@ export default function GuidancePage() {
 
           <div className="r-actions">
             <button className="btn quiet" onClick={refresh} disabled={loading}>
-              Refresh
+              {loading ? "Refreshing…" : "Refresh"}
             </button>
             {result?.source === "heuristic" && (
               <span className="small muted">generated locally · basic mode</span>
+            )}
+            {error && !loading && (
+              <span className="small muted" role="status">
+                Couldn&apos;t refresh — {error}. Showing your previous plan.
+              </span>
             )}
           </div>
         </>

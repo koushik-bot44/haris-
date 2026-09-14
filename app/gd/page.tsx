@@ -2,10 +2,13 @@
 
 import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { GD_CAP_MS, useGdMachine } from "@/hooks/useGdMachine";
 import { VoiceOrb } from "@/components/VoiceOrb";
 import { GD_TOPICS } from "@/lib/fixtures/gd-topics";
 import { AIRTIME_BAND } from "@/lib/gd/airtime";
+import { micHelp } from "@/lib/mic-help";
+import { sttCapabilities } from "@/lib/stt";
 
 // Speaker words share the interview room's humane treatment: display serif,
 // large, centered (see .caption in globals.css). Chrome stays quiet UI sans.
@@ -148,7 +151,9 @@ function GdRoom({ topic, name }: { topic: string; name: string }) {
   useEffect(() => {
     const inProgress = inRoom;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (inProgress) e.preventDefault();
+      if (!inProgress) return;
+      e.preventDefault();
+      e.returnValue = "";
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
@@ -186,6 +191,9 @@ function GdRoom({ topic, name }: { topic: string; name: string }) {
   }, [m, inRoom]);
 
   const leave = () => {
+    // Mid-discussion the round is not saved — the same warning the tab-close
+    // guard gives, so "Leave" is never a silent discard.
+    if (inRoom && !window.confirm("Leave the discussion? This round won't be saved.")) return;
     m.cleanup();
     router.push("/");
   };
@@ -278,12 +286,19 @@ function GdMicCheck({ m }: { m: M }) {
       ) : (
         <>
           <p className="muted">
-            The microphone isn't available ({m.micBlocked}). The GD room needs voice — check the
-            address-bar mic permission (or use Google Chrome) and try again.
+            The GD room needs voice. {micHelp(m.micBlocked, { cloudStt: Boolean(sttCapabilities()?.cloud) })}
           </p>
-          <button className="btn" onClick={m.beginMicCheck}>
-            Try microphone again
-          </button>
+          <div className="mic-row">
+            <button className="btn" onClick={m.beginMicCheck}>
+              Try microphone again
+            </button>
+            <a className="btn quiet" href="/">
+              Back
+            </a>
+          </div>
+          <p className="small muted mic-diag">
+            diagnostic code: <code>{m.micBlocked}</code>
+          </p>
         </>
       )}
     </section>
@@ -300,7 +315,7 @@ function GdPreroll({ m }: { m: M }) {
         <strong>4½ minutes</strong> — they will not stop to ask what you think.
       </p>
       <p>
-        <strong>Just start talking to interrupt</strong> — or hold <kbd>Space</kbd> to grab the
+        <strong>Just start talking to interrupt</strong> — or press <kbd>Space</kbd> to grab the
         floor. Pausing for ~1.5 seconds (or pressing <kbd>Enter</kbd>) hands it back. Aim for {lo}–{hi}% of the
         airtime, and build on the previous speaker's point when you jump in.
       </p>
@@ -476,7 +491,7 @@ function Room({ m, spaceDown }: { m: M; spaceDown: boolean }) {
             "You're speaking…"
           ) : (
             <>
-              <kbd>Space</kbd> hold to jump in
+              <kbd>Space</kbd> jump in
             </>
           )}
         </button>
@@ -492,9 +507,14 @@ function Room({ m, spaceDown }: { m: M; spaceDown: boolean }) {
       </div>
 
       {m.micBlocked && (
-        <div className="card tinted small mic-trouble">
-          <strong>Mic trouble</strong> ({m.micBlocked}) — your words may not be transcribed. Check the
-          address-bar mic permission.
+        <div className="card tinted small mic-trouble" role="status">
+          <strong>Mic trouble</strong> — your words may not be transcribed.{" "}
+          {micHelp(m.micBlocked, { cloudStt: Boolean(sttCapabilities()?.cloud) })}
+        </div>
+      )}
+      {m.engineNotice && (
+        <div className="card tinted small mic-trouble" role="status">
+          <strong>Debate engine</strong> — {m.engineNotice}
         </div>
       )}
 
@@ -520,6 +540,16 @@ function GdScorecard({ m }: { m: M }) {
   const built = gm?.interjections.filter((i) => i.builtOnPrevious).length ?? 0;
   const [lo, hi] = AIRTIME_BAND;
   const debaters = m.personas.filter((p) => p.id !== "moderator");
+
+  const downloadJson = () => {
+    const blob = new Blob([JSON.stringify(s, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `gd-session-${s._id.slice(0, 8)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <section className="panel-enter">
@@ -585,12 +615,21 @@ function GdScorecard({ m }: { m: M }) {
       )}
 
       <div className="gd-form-actions">
-        <a className="btn" href={`/report/${s._id}`}>
-          View full report →
-        </a>
-        <a className="btn secondary" href="/">
+        {/* A round that could not be saved has no report page to open — the
+            JSON download is the honest offer (client-side navigation keeps
+            the in-memory round alive when it IS saved). */}
+        {m.sessionPersisted ? (
+          <Link className="btn" href={`/report/${s._id}`}>
+            View full report →
+          </Link>
+        ) : (
+          <button className="btn" onClick={downloadJson}>
+            Download session JSON
+          </button>
+        )}
+        <Link className="btn secondary" href="/">
           Practice again
-        </a>
+        </Link>
       </div>
     </section>
   );

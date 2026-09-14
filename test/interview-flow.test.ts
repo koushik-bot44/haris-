@@ -8,6 +8,7 @@ import {
   MAX_FOLLOWUPS_PER_QUESTION,
   projectDiveQuestions,
   QUESTIONS_PER_INTERVIEW,
+  sessionSeedFrom,
 } from "@/lib/llm/interview-flow";
 import { EXPERIENCED_HR_QUESTIONS, FRESHER_HR_QUESTIONS, HR_QUESTIONS } from "@/lib/fixtures/hr-questions";
 import { CODING_INTRO, DSA_QUESTIONS, technicalBank } from "@/lib/fixtures/technical-questions";
@@ -140,6 +141,120 @@ describe("interview flow", () => {
     const qs = effectiveQuestions("hari", "technical", "general");
     expect(qs[CODING_QUESTION_SLOT - 1].coding).toBe(true);
     expect(qs[CODING_QUESTION_SLOT - 1].followup).toBe("");
+  });
+});
+
+// The scripted bank used to be seeded on the candidate's NAME alone, so the
+// same person got the identical five questions and the identical deep probes in
+// every session they ever ran — the fixture half of "never ask the same
+// question twice". Selection now varies per session AND yields to what
+// long-term memory says was already asked.
+describe("question variety across sessions", () => {
+  /** A session is identified by its opening turn: fixed once it exists, and
+   * written fresh by the model every session in production. */
+  function sessionOf(opening: string): HistoryEntry[] {
+    return [{ speaker: "interviewer", text: opening }, { speaker: "candidate", text: LONG_ANSWER }];
+  }
+
+  it("gives the same candidate a different opening question session to session", () => {
+    // Measured across several sessions, not one pair: with a ten-question bank
+    // two sessions can draw the same opener by chance, and a test that forbids
+    // that is testing luck. Before this, ALL of them were identical.
+    const openings = Array.from({ length: 8 }, (_, i) => `Hi Hari — good to meet you, take ${i}. Shall we start?`);
+    const openers = openings.map((o) => computeNextTurn("hari", sessionOf(o)).text);
+    expect(new Set(openers).size).toBeGreaterThanOrEqual(4);
+  });
+
+  it("varies the whole five-question set, not just its first entry", () => {
+    const sets = Array.from({ length: 8 }, (_, i) =>
+      effectiveQuestions("hari", "hr", "general", undefined, undefined, undefined, {
+        sessionSeed: sessionSeedFrom("hari", sessionOf(`Hi Hari — take ${i}. Shall we start?`)),
+      })
+        .map((q) => q.text)
+        .join("|"),
+    );
+    expect(new Set(sets).size).toBeGreaterThanOrEqual(6);
+  });
+
+  it("is still fixed WITHIN a session — the seed cannot shift mid-interview", () => {
+    // readPosition recognises past turns by exact text against this very set,
+    // so a set that changed as the history grew would orphan every question
+    // already asked and restart the round.
+    const history = sessionOf("Hi Hari, good to meet you — shall we start?");
+    const first = computeNextTurn("hari", history);
+    for (let i = 0; i < 4; i++) {
+      history.push({ speaker: "interviewer", text: "…" }, { speaker: "candidate", text: LONG_ANSWER });
+      expect(sessionSeedFrom("hari", history)).toBe(sessionSeedFrom("hari", history.slice(0, 2)));
+    }
+    expect(computeNextTurn("hari", history.slice(0, 2)).text).toBe(first.text);
+  });
+
+  it("varies the deep probes per session too, not just the questions", () => {
+    const probesOf = (opening: string) => {
+      const history = sessionOf(opening);
+      const texts: string[] = [];
+      for (let guard = 0; guard < 20; guard++) {
+        const turn = computeNextTurn("hari", history, "hr", "general");
+        if (turn.done) break;
+        texts.push(turn.text);
+        history.push({ speaker: "interviewer", text: turn.text });
+        history.push({ speaker: "candidate", text: "I don't know really." });
+      }
+      return texts.filter((t) => DEEP_PROBES.hr.includes(t));
+    };
+    const a = probesOf("Hi Hari, good to meet you — shall we start?");
+    const b = probesOf("Hari! Welcome back. Ready when you are.");
+    expect(a.length).toBeGreaterThan(0);
+    expect(a).not.toEqual(b);
+  });
+
+  it("skips questions memory says this candidate has already been asked", () => {
+    const opening = "Hi Hari, good to meet you — shall we start?";
+    const fresh = effectiveQuestions("hari", "hr", "general", undefined, undefined, undefined, {
+      sessionSeed: sessionSeedFrom("hari", sessionOf(opening)),
+    });
+    const avoid = fresh.map((q) => q.text);
+    const second = effectiveQuestions("hari", "hr", "general", undefined, undefined, undefined, {
+      sessionSeed: sessionSeedFrom("hari", sessionOf(opening)),
+      avoid,
+    });
+    // Same seed, same everything — the ONLY difference is memory, and it is
+    // enough to clear every repeat out of the round.
+    for (const q of second) expect(avoid).not.toContain(q.text);
+  });
+
+  it("matches a remembered question even when it was stored truncated", () => {
+    const bankQuestion = HR_QUESTIONS[0].text;
+    const qs = effectiveQuestions("hari", "hr", "general", undefined, undefined, undefined, {
+      avoid: [bankQuestion.slice(0, 40)],
+    });
+    expect(qs.map((q) => q.text)).not.toContain(bankQuestion);
+  });
+
+  it("still fills the round when memory has exhausted the bank — a repeat beats a stub", () => {
+    // Third session with a 10-question bank and 5 slots per round: an outright
+    // filter would run dry and hand the candidate a two-question interview.
+    const qs = effectiveQuestions("hari", "hr", "general", undefined, undefined, undefined, {
+      avoid: HR_QUESTIONS.map((q) => q.text),
+    });
+    expect(qs).toHaveLength(QUESTIONS_PER_INTERVIEW);
+    expect(new Set(qs.map((q) => q.text)).size).toBe(QUESTIONS_PER_INTERVIEW);
+  });
+
+  it("keeps the technical round's shape while avoiding remembered DSA questions", () => {
+    const bank = technicalBank("general");
+    const avoid = bank.slice(0, 6).map((q) => q.text);
+    const qs = effectiveQuestions("hari", "technical", "general", undefined, undefined, undefined, { avoid });
+    expect(qs).toHaveLength(QUESTIONS_PER_INTERVIEW);
+    expect(qs[CODING_QUESTION_SLOT - 1].coding).toBe(true);
+    const spoken = qs.filter((q) => !q.coding).map((q) => q.text);
+    for (const t of spoken) expect(avoid).not.toContain(t);
+  });
+
+  it("no memory and no session seed reproduces the old name-only behaviour", () => {
+    const a = effectiveQuestions("hari", "hr", "general");
+    const b = effectiveQuestions("hari", "hr", "general", undefined, undefined, undefined, {});
+    expect(a.map((q) => q.text)).toEqual(b.map((q) => q.text));
   });
 });
 

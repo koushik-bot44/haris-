@@ -172,9 +172,12 @@ export function currentStage(
 }
 
 /** The coding hand-off is recognised by its editor phrasing, which every
- * lead-in shares. Shared by the stage machine and the prompt builder so both
- * agree on whether the exercise has already happened. */
-const CODING_HANDOFF = /editor is open|the editor/i;
+ * lead-in shares (lib/fixtures/technical-questions.ts CODING_LEAD_INS).
+ * Shared by the stage machine and the prompt builder so both agree on
+ * whether the exercise has already happened. Deliberately NOT "the editor":
+ * an interviewer merely mentioning an editor must not flip the round into
+ * code review. */
+const CODING_HANDOFF = /editor is open|use the editor/i;
 
 export function codingAlreadyAsked(history: HistoryEntry[]): boolean {
   return history.some((h) => h.speaker === "interviewer" && CODING_HANDOFF.test(h.text));

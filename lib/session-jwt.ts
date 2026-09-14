@@ -10,8 +10,20 @@ const DEV_SECRET =
 const ALG = "HS256";
 const EXPIRY = "7d";
 
+export class MissingSecretError extends Error {
+  constructor() {
+    super("AUTH_JWT_SECRET must be set in production");
+    this.name = "MissingSecretError";
+  }
+}
+
 function secretKey(): Uint8Array {
-  return new TextEncoder().encode(process.env.AUTH_JWT_SECRET || DEV_SECRET);
+  const configured = process.env.AUTH_JWT_SECRET?.trim();
+  if (configured) return new TextEncoder().encode(configured);
+  // Defense in depth behind instrumentation.ts: even if the boot check was
+  // bypassed, production never signs or verifies with the public dev secret.
+  if (process.env.NODE_ENV === "production") throw new MissingSecretError();
+  return new TextEncoder().encode(DEV_SECRET);
 }
 
 export interface SessionClaims {

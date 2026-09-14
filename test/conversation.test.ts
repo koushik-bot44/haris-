@@ -6,7 +6,10 @@ import {
   GIVE_UP_MS,
   NUDGE_START_MS,
   OFFER_REPHRASE_MS,
+  PAUSE_END_FAST_MS,
   PAUSE_END_MS,
+  PAUSE_HOLD_MS,
+  pauseNeededMs,
   shouldSpeculate,
   SPECULATE_MIN_WORDS,
   SPECULATE_PAUSE_MS,
@@ -125,6 +128,96 @@ describe("pause path (speech present)", () => {
     // After nudge_continue the candidate kept talking to 20 words.
     expect(decideListenAction(snap({ msSinceLastSpeech: 300, words: 20, nudges: 1 }))).toBe("wait");
     expect(decideListenAction(snap({ msSinceLastSpeech: PAUSE_END_MS, words: 20, nudges: 1 }))).toBe("end_answer");
+  });
+});
+
+// The single biggest slice of dead air was a flat 1.5s wait after the last
+// syllable — applied identically to "…and then, um" and to "…that's it".
+// pauseNeededMs makes the wait a function of the words themselves.
+
+describe("pauseNeededMs (endpointing follows the sentence, not a stopwatch)", () => {
+  it("orders the three tiers, and moves BOTH ways against the old flat floor", () => {
+    expect(PAUSE_END_FAST_MS).toBeLessThan(PAUSE_END_MS);
+    expect(PAUSE_END_MS).toBeLessThan(PAUSE_HOLD_MS);
+    // Faster than the old 1500ms on an ordinary answer…
+    expect(PAUSE_END_MS).toBeLessThan(1500);
+    // …and MORE patient than it when the candidate is visibly mid-thought.
+    expect(PAUSE_HOLD_MS).toBeGreaterThan(1500);
+  });
+
+  it("holds for a trailing conjunction, preposition, article or filler", () => {
+    for (const t of [
+      "I profiled the query and",
+      "we shipped it because",
+      "the hardest part was the",
+      "so my approach was um",
+      "I think I would",
+    ]) {
+      expect(pauseNeededMs(t)).toBe(PAUSE_HOLD_MS);
+    }
+  });
+
+  it("holds through Whisper's habit of ending EVERY segment with a full stop", () => {
+    // The transcriber punctuates mid-thought segments exactly like finished
+    // ones, so the trailing word decides — not the dot.
+    expect(pauseNeededMs("I used a queue and.")).toBe(PAUSE_HOLD_MS);
+    expect(pauseNeededMs("First, I profiled the query,")).toBe(PAUSE_HOLD_MS);
+  });
+
+  it("does NOT treat a full stop as a hand-back", () => {
+    // Whisper puts one on every segment; shortening the wait for punctuation
+    // alone would cut people off between sentences.
+    expect(pauseNeededMs("I built a placement day simulator.")).toBe(PAUSE_END_MS);
+  });
+
+  it("hands the turn straight back when the candidate says so out loud", () => {
+    for (const t of [
+      "and that's it",
+      "I think that's all.",
+      "yeah that's it",
+      "so we shipped it. I'm done",
+      "that's my answer",
+    ]) {
+      expect(pauseNeededMs(t)).toBe(PAUSE_END_FAST_MS);
+    }
+  });
+
+  it("falls back to the neutral wait on empty or unremarkable text", () => {
+    expect(pauseNeededMs("")).toBe(PAUSE_END_MS);
+    expect(pauseNeededMs("   ")).toBe(PAUSE_END_MS);
+    expect(pauseNeededMs("we used Redis for the leaderboard")).toBe(PAUSE_END_MS);
+  });
+});
+
+describe("decideListenAction honours the per-transcript pause", () => {
+  it("a mid-thought pause outlasts the neutral floor", () => {
+    const mid = { words: 40, pauseNeededMs: PAUSE_HOLD_MS };
+    expect(decideListenAction(snap({ msSinceLastSpeech: PAUSE_END_MS, ...mid }))).toBe("wait");
+    expect(decideListenAction(snap({ msSinceLastSpeech: PAUSE_HOLD_MS - 1, ...mid }))).toBe("wait");
+    expect(decideListenAction(snap({ msSinceLastSpeech: PAUSE_HOLD_MS, ...mid }))).toBe("end_answer");
+  });
+
+  it("an explicit hand-back ends well before the neutral floor", () => {
+    expect(
+      decideListenAction(snap({ msSinceLastSpeech: PAUSE_END_FAST_MS, words: 40, pauseNeededMs: PAUSE_END_FAST_MS })),
+    ).toBe("end_answer");
+    expect(
+      decideListenAction(
+        snap({ msSinceLastSpeech: PAUSE_END_FAST_MS - 1, words: 40, pauseNeededMs: PAUSE_END_FAST_MS }),
+      ),
+    ).toBe("wait");
+  });
+
+  it("an absent pauseNeededMs means the neutral floor (every existing caller)", () => {
+    expect(decideListenAction(snap({ msSinceLastSpeech: PAUSE_END_MS, words: 40 }))).toBe("end_answer");
+  });
+
+  it("the silent path ignores it entirely — no speech, nothing to endpoint", () => {
+    expect(
+      decideListenAction(
+        snap({ msSinceListenStart: NUDGE_START_MS, msSinceLastSpeech: null, pauseNeededMs: PAUSE_END_FAST_MS }),
+      ),
+    ).toBe("nudge_start");
   });
 });
 

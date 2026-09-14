@@ -67,7 +67,9 @@ export function Hero() {
             View dashboard
           </a>
         </div>
-        <p className="hero-note">No login. Nothing uploaded. Your session stays on this device.</p>
+        <p className="hero-note">
+          No login needed. Your results stay on this device unless you sign in; only your words reach the AI.
+        </p>
 
         <div className="hero-features">
           {FEATURES.map((f) => (

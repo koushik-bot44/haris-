@@ -13,11 +13,38 @@ export function dbEnabled(): boolean {
   return Boolean(process.env.MONGODB_URI);
 }
 
+let warnedBadUri = false;
+
+/** MONGODB_DB, else the database in the URI path, else "pds" — never the
+ * driver's silent "test" default. */
+export function databaseName(uri: string): string | undefined {
+  const explicit = process.env.MONGODB_DB?.trim();
+  if (explicit) return explicit;
+  try {
+    const path = new URL(uri).pathname.replace(/^\/+/, "");
+    if (path) return undefined; // the driver reads it from the URI
+  } catch {
+    // unparsable — fall through to the named default
+  }
+  return "pds";
+}
+
 export async function getDb(): Promise<Db | null> {
   const uri = process.env.MONGODB_URI;
   if (!uri) return null;
   if (!globalForMongo._pdsMongoClient) {
-    const connecting = new MongoClient(uri, { maxPoolSize: 10 }).connect();
+    let connecting: Promise<MongoClient>;
+    try {
+      // The constructor itself throws on a malformed URI — that must degrade
+      // exactly like a failed connect, never bubble up as an unhandled 500.
+      connecting = new MongoClient(uri, { maxPoolSize: 10 }).connect();
+    } catch (err) {
+      if (!warnedBadUri) {
+        warnedBadUri = true;
+        console.error("[db] MONGODB_URI is invalid — persistence disabled:", err instanceof Error ? err.message : err);
+      }
+      return null;
+    }
     // A failed connect must not poison the cache — the next request retries.
     connecting.catch(() => {
       if (globalForMongo._pdsMongoClient === connecting) {
@@ -28,8 +55,7 @@ export async function getDb(): Promise<Db | null> {
   }
   try {
     const client = await globalForMongo._pdsMongoClient;
-    // No MONGODB_DB → the database named in the URI path (driver default).
-    return client.db(process.env.MONGODB_DB);
+    return client.db(databaseName(uri));
   } catch {
     // Routes treat null as "storage disabled" — a bad MONGODB_URI must degrade
     // to 501, never surface as an unhandled 500. (Cache was un-poisoned above.)

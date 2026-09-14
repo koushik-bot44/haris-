@@ -55,8 +55,58 @@ function isCtrlLine(line: string): boolean {
   const t = line.trimStart();
   if (t.startsWith(CTRL_PREFIX)) return true; // @@CTRL {...}
   if (/^@+\s*CTRL\b/i.test(t)) return true; // @CTRL, @@@CTRL, @ CTRL
-  if (/^@*\s*\{[^}]*"(?:type|topic|questionIndex|asked|asking|done)"\s*:/.test(t)) return true;
+  if (/^@*\s*\{[^}]*"(?:type|topic|questionIndex|asked|asking|done)"\s*:/.test(t)) {
+    // Same rule as controlStartFor: a bare object with speech AFTER its closing
+    // brace is being quoted, not emitted — `{"type":"error"} is what it sent
+    // back. Why?` must not lose the whole line to this scrub.
+    if (t.startsWith("@")) return true;
+    const end = objectEnd(t, t.indexOf("{"));
+    return end === -1 || !t.slice(end + 1).trim();
+  }
   return false;
+}
+
+/** Index of the brace that closes the object opening at `text[start]`, or -1
+ * while it is still open. String-aware, so a "}" inside a value does not close
+ * it and a "{" inside one does not nest. This is what lets the control JSON be
+ * cut out as ONE balanced object: the old first-"{"-to-last-"}" slice swallowed
+ * everything between two control lines — or between a quoted object and the
+ * real one — and the whole turn then fell back to default control fields. */
+function objectEnd(text: string, start: number): number {
+  let depth = 0;
+  let inStr = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (ch === "\\") i++;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}" && --depth === 0) return i;
+  }
+  return -1;
+}
+
+const TURN_TYPES = new Set(["greeting", "reply", "question", "followup", "wrapup"]);
+
+/** Could this closed, unmarked object be the model's control line at all? It
+ * has to parse, and if it names a `type` it has to be one of ours: a quoted
+ * `{"type":"error","done":true}` at the very end of a sentence used to be
+ * adopted wholesale — the speech truncated at the brace AND the interview
+ * ended on that done:true. Unparseable text is still treated as control, as
+ * before: it is never worth reading JSON-shaped junk aloud. */
+function plausibleBareControl(json: string): boolean {
+  let obj: unknown;
+  try {
+    obj = JSON.parse(json);
+  } catch {
+    return true;
+  }
+  if (obj === null || typeof obj !== "object") return true;
+  const type = (obj as Record<string, unknown>).type;
+  return typeof type !== "string" || TURN_TYPES.has(type);
 }
 
 /** First control line; mid-text occurrences are spoken content. */
@@ -73,11 +123,54 @@ function ctrlLineIndex(lines: string[]): number {
  *
  * The bare-brace form additionally requires a control key, so a candidate
  * saying "then I return an object" is never mistaken for control. */
-const CTRL_ANYWHERE =
-  /@+\s*CTRL\b|@+\s*\{|\{(?=[^{}]*"(?:type|topic|questionIndex|asked|asking|done)"\s*:)/i;
+/** Just the explicit, "@"-prefixed forms — the half of the hunt that can never
+ * be mistaken for speech. */
+const CTRL_MARKER = /@+\s*CTRL\b|@+\s*\{/i;
 
-function findCtrlStart(text: string): number {
-  return text.search(CTRL_ANYWHERE);
+/** The other half: an unmarked object carrying a control key. */
+const CTRL_BARE = /\{(?=[^{}]*"(?:type|topic|questionIndex|asked|asking|done)"\s*:)/;
+
+/** Where the control block starts in a COMPLETE reply.
+ *
+ * Same hunt as findCtrlStart, with one extra rule for the BARE-BRACE form: it
+ * only counts as control when nothing but whitespace follows its closing brace.
+ *
+ * The bare-brace rule exists because models improvise the marker, and its
+ * comment defends it against prose ("then I return an object") — which does not
+ * cover a model QUOTING an actual object back at the candidate. A technical
+ * round discussing a response body would hit
+ *   Your handler returned {"type":"error","done":true} — why not a 4xx?
+ * and the old code took that as control: it truncated the spoken text at the
+ * brace (losing the actual question) AND adopted done:true, ending the whole
+ * interview on a flag the interviewer never meant. Truncating quoted speech is
+ * a defensible tradeoff; silently ending the round is not.
+ *
+ * An explicit @@CTRL marker stays unambiguous and keeps working anywhere. */
+function controlStartFor(text: string, streaming = false): number {
+  // An explicit "@" marker is unambiguous, so it wins wherever it appears —
+  // including when the reply ALSO quotes a control-shaped object earlier, which
+  // is the case the bare-brace rule below would otherwise cut at.
+  const marked = text.search(CTRL_MARKER);
+  if (marked !== -1) return marked;
+  // Every bare-brace candidate in turn, not just the first: a reply that quotes
+  // one object and then emits its real control line used to be cut at the
+  // QUOTE, which threw away the question and left the control JSON unreadable.
+  let from = 0;
+  for (;;) {
+    const rel = text.slice(from).search(CTRL_BARE);
+    if (rel === -1) return -1;
+    const cut = from + rel;
+    const end = objectEnd(text, cut);
+    if (end === -1) return cut; // still unclosed — control (or still forming)
+    if (text.slice(end + 1).trim()) {
+      from = end + 1; // speech follows the brace: quoted, keep looking
+      continue;
+    }
+    // Closed, and nothing follows. Mid-stream that is exactly what a control
+    // line looks like one tick before the newline arrives, so it is withheld;
+    // on the complete reply it still has to look like OUR control object.
+    return streaming || plausibleBareControl(text.slice(cut, end + 1)) ? cut : -1;
+  }
 }
 
 /** Last-ditch scrub: drop any line that still looks like control JSON. The
@@ -88,8 +181,23 @@ function scrubSpoken(text: string): string {
   return text
     .split(/\r?\n/)
     .filter((l) => !isCtrlLine(l))
+    // Control put BEFORE the speech on the same line (`{"type":"reply",…} Nice
+    // to meet you.`) — strip the object and keep the words, rather than dropping
+    // the line (which emptied the turn) or reading the JSON aloud.
+    .map(stripLeadingControl)
     .join("\n")
     .trim();
+}
+
+function stripLeadingControl(line: string): string {
+  const t = line.trimStart();
+  if (!/^@*\s*\{[^}]*"(?:type|topic|questionIndex|asked|asking|done)"\s*:/.test(t)) return line;
+  const at = t.indexOf("{");
+  const end = objectEnd(t, at);
+  // `{"type":"error"} is what it sent back. Why?` is a quote — same test as
+  // controlStartFor: only something that could be OUR object gets stripped.
+  if (end === -1 || (!t.startsWith("@") && !plausibleBareControl(t.slice(at, end + 1)))) return line;
+  return t.slice(end + 1).trim();
 }
 
 /** Parse a streamed-protocol reply: plain spoken lines + final @@CTRL line.
@@ -100,7 +208,7 @@ export function parseStreamedTurn(raw: string): InterviewerTurn | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
   // Split speech from control wherever the marker turns up — own line or not.
-  const cut = findCtrlStart(trimmed);
+  const cut = controlStartFor(trimmed);
   if (cut === -1) {
     const text = scrubSpoken(trimmed).slice(0, 1200);
     if (!text) return null;
@@ -110,7 +218,12 @@ export function parseStreamedTurn(raw: string): InterviewerTurn | null {
   if (!text) return null;
   const ctrlPart = trimmed.slice(cut);
   const braceAt = ctrlPart.indexOf("{");
-  const jsonPart = braceAt === -1 ? "" : ctrlPart.slice(braceAt, ctrlPart.lastIndexOf("}") + 1);
+  // ONE balanced object, not first-"{"-to-last-"}": a model that repeats its
+  // control line (observed) used to hand JSON.parse two objects glued together
+  // and lose every control field to the defaults. Unclosed → the old slice.
+  const closeAt = braceAt === -1 ? -1 : objectEnd(ctrlPart, braceAt);
+  const jsonPart =
+    braceAt === -1 ? "" : ctrlPart.slice(braceAt, (closeAt === -1 ? ctrlPart.lastIndexOf("}") : closeAt) + 1);
   let obj: unknown = null;
   try {
     obj = JSON.parse(jsonPart);
@@ -152,11 +265,29 @@ export function parseStreamedTurn(raw: string): InterviewerTurn | null {
  * first line-initial @@CTRL; a trailing partial "@@C…" prefix on the last line
  * is withheld until disambiguated (so TTS never speaks half a control marker). */
 export function visibleStreamText(buffer: string): string {
-  const cut = findCtrlStart(buffer);
+  // The streaming cut follows the parser's rule, so the caption never shows
+  // less than the final turn will say. It used to cut at the FIRST bare-brace
+  // candidate, so a quoted `{"type":"error"} and then it crashed. Why?` stayed
+  // frozen at "it returned" for the whole stream and the rest of the question
+  // arrived in one lump with the final turn.
+  const cut = controlStartFor(buffer, true);
   const spoken = cut === -1 ? buffer : buffer.slice(0, cut);
   // A trailing partial marker is withheld until it can be told from speech —
   // "@@C…", "@" or an opening "@{" must never reach the TTS mid-stream.
-  return spoken.replace(/(?:^|\s)@[@\s]*(?:C(?:T(?:R(?:L)?)?)?)?\{?\s*$/i, "").trim();
+  return (
+    spoken
+      .replace(/(?:^|\s)@[@\s]*(?:C(?:T(?:R(?:L)?)?)?)?\{?\s*$/i, "")
+      // …and so must a trailing UNCLOSED brace that could still become the
+      // bare-brace control form. CTRL_ANYWHERE only matches once the first
+      // control KEY is complete ('{"type":'), so without this the fragments
+      // '{', '{"', '{"t', '{"ty' … each reach the TTS and the caption on
+      // successive stream ticks, and the visible text then SHRINKS when the key
+      // finally completes — which cannot un-speak what was already said.
+      // Requires no '}' yet, so a closed object the interviewer is quoting
+      // ("it returned {}") is left alone.
+      .replace(/(?:^|\s)@*\s*\{\s*"?[A-Za-z]*"?\s*:?\s*$/, "")
+      .trim()
+  );
 }
 
 /** Parse a model reply into an InterviewerTurn. Tolerates code fences and
@@ -208,13 +339,28 @@ export function deriveProgress(history: HistoryEntry[]): Progress {
 }
 
 export const HARD_STOP_ANSWERS = 16; // 5 deep-dive topics × probe chains need room — never longer
+/** Interviewer turns (answers or not) after which the round closes regardless —
+ * keeps the transcript inside the request schema's history cap. */
+export const HARD_STOP_INTERVIEWER_TURNS = 50;
 
 /** Force-terminate runaway interviews regardless of what the model returns. */
 export function clampTurn(turn: InterviewerTurn, progress: Progress): InterviewerTurn {
-  if (progress.answers >= HARD_STOP_ANSWERS && !turn.done) {
+  if ((progress.answers >= HARD_STOP_ANSWERS || progress.interviewerTurns >= HARD_STOP_INTERVIEWER_TURNS) && !turn.done) {
     return { ...turn, type: "wrapup", done: true };
   }
   return turn;
+}
+
+/** Is the candidate ASKING something? Speech recognition almost never emits a
+ * question mark, so "what is the tech stack" must count as much as "…?". */
+export function looksLikeCandidateQuestion(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (!t) return false;
+  if (t.endsWith("?")) return true;
+  if (t.split(/\s+/).length > 30) return false; // a long answer is an answer
+  return /^(?:(?:so|and|but|okay|ok|um|uh|hmm|also|just|quick question|one question|i have a question)[,\s]+)*(?:what|what's|whats|how|how's|why|when|where|which|who|who's|is|are|am|do|does|did|can|could|would|will|should|shall|may|have|has|tell me about|could you tell|can you tell)\b/.test(
+    t,
+  );
 }
 
 /** How many recent entries stay verbatim. The whole transcript used to ship on

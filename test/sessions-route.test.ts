@@ -149,6 +149,24 @@ describe("/api/sessions IDOR policy", () => {
     expect(res.status).toBe(401);
   });
 
+  it("unauthenticated POST answers 401 and stores nothing (guests never mirror)", async () => {
+    state.userId = null;
+    const res = await POST(postReq(makeSession("session-guest")));
+    expect(res.status).toBe(401);
+    expect(state.store.has("session-guest")).toBe(false);
+  });
+
+  it("refuses an oversized body before parsing it", async () => {
+    state.userId = "google:owner";
+    const req = new Request("http://localhost/api/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": String(10 * 1024 * 1024) },
+      body: JSON.stringify({ session: makeSession("session-big") }),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(413);
+  });
+
   it("zero-env (dbEnabled false) answers 501 on both verbs", async () => {
     state.dbOn = false;
     const post = await POST(postReq(makeSession("session-zero-env")));

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { RubricEntry, RubricScores } from "@/lib/types";
+import type { RubricEntry, RubricScores, SessionScoring } from "@/lib/types";
 
 // The rubric contract, its validation, and the evidence-quote verifier.
 // The verifier is the project's thesis-protector: a hallucinated "quote from
@@ -94,18 +94,42 @@ export function composeOverall(entries: RubricEntry[]): { avgScore: number | nul
   const avg = entries.reduce((a, e) => a + avgScore(e.scores), 0) / entries.length;
   const totals: Record<Criterion, number> = { relevance: 0, structure: 0, depth: 0, communication: 0 };
   for (const e of entries) for (const c of CRITERIA) totals[c] += e.scores[c];
-  const strongest = [...CRITERIA].sort((a, b) => totals[b] - totals[a])[0];
-  const weakest = [...CRITERIA].sort((a, b) => totals[a] - totals[b])[0];
   const LABEL: Record<Criterion, string> = {
     relevance: "staying on-point",
     structure: "structuring answers (situation → action → result)",
     depth: "backing claims with specifics",
     communication: "clear, confident delivery",
   };
+  // Stable sorts with a deterministic tiebreak (CRITERIA order), and the
+  // weakest is chosen from the criteria EXCLUDING the strongest, so a tie can
+  // never name the same criterion as both strength and weakness.
+  const byDesc = [...CRITERIA].sort((a, b) => totals[b] - totals[a] || CRITERIA.indexOf(a) - CRITERIA.indexOf(b));
+  const strongest = byDesc[0];
+  const rest = CRITERIA.filter((c) => c !== strongest);
+  const weakest = [...rest].sort((a, b) => totals[a] - totals[b] || CRITERIA.indexOf(a) - CRITERIA.indexOf(b))[0];
+  const even = totals[strongest] === totals[weakest];
+  const rounded = Math.round(avg * 10) / 10;
+  if (even) {
+    return {
+      avgScore: rounded,
+      summary:
+        rounded >= 4
+          ? `Your scores were even across all four criteria, and strong. Next: pick one answer and add a concrete number or named example to push it from good to memorable.`
+          : `Your scores were even across all four criteria. One thing to work on before the next interview: ${LABEL.depth} — a specific example lifts every other criterion with it.`,
+    };
+  }
   return {
-    avgScore: Math.round(avg * 10) / 10,
+    avgScore: rounded,
     summary: `Your strength this round: ${LABEL[strongest]}. One thing to work on before the next interview: ${LABEL[weakest]}.`,
   };
+}
+
+/** Why a round ended up with the scores it has (or none). */
+export function scoringStatus(scored: number, tooShort: number, failed: number): SessionScoring {
+  if (scored > 0) return { status: failed > 0 ? "partial" : "ok", failed };
+  if (failed > 0) return { status: "unavailable", failed };
+  if (tooShort > 0) return { status: "too_short", failed };
+  return { status: "none", failed };
 }
 
 /** Short/empty answers are not scoreable — the plan's too-short gate. */

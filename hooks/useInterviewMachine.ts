@@ -13,23 +13,42 @@ import type {
   SttTraceEvent,
   Turn,
 } from "@/lib/types";
-import { composeOverall } from "@/lib/rubric";
-import { getSttEngine, setSttEngineEphemeral, startStt, type SttSession } from "@/lib/stt";
+import { composeOverall, scoringStatus } from "@/lib/rubric";
+import {
+  nextSttEngine,
+  pickSttEngine,
+  resolveSttCapabilities,
+  setSttEngineEphemeral,
+  startStt,
+  type SttSession,
+} from "@/lib/stt";
 import { ensureWhisperLoading } from "@/lib/stt-whisper";
 import { fullTranscript, type SttState } from "@/lib/stt-reducer";
-import { chainSpeak, prepareSpeak, speak, type PreparedSpeech, type SpeakHandle } from "@/lib/tts";
-import { firstSentence, parseSseEvents, remainderAfter } from "@/lib/stream";
-import { decideBargeIn, echoOverlap, ECHO_OVERLAP_THRESHOLD } from "@/lib/barge-in";
+import { getVoiceEngine, prepareSpeak, resolveVoiceEngine, speak, unlockAudio, type PreparedSpeech, type SpeakHandle, type VoiceEngine } from "@/lib/tts";
+import { kokoroProgress, kokoroStatus } from "@/lib/tts-kokoro";
+
+/** See `voiceWarmup` in the hook. */
+export interface VoiceWarmup {
+  engine: VoiceEngine | null;
+  /** False only while the on-device model is still downloading. */
+  ready: boolean;
+  /** 0–100 while downloading, else null. */
+  progress: number | null;
+}
+import { parseSseEvents } from "@/lib/stream";
+import { createSpeechQueue, type SpeechQueue } from "@/lib/speech-queue";
+import { SentenceStreamer } from "@/lib/sentence-split";
+import { decideBargeIn, dropSelfEcho, echoOverlap, ECHO_OVERLAP_THRESHOLD } from "@/lib/barge-in";
 import { aggregateMetrics, computeDeliveryMetrics, METRICS_VERSION } from "@/lib/metrics";
 import { newSessionId, saveSession } from "@/lib/session-store";
 import { ACK_TEXTS, playAck, prepareAcks, resetAcks, type AckHandle, type AckKind } from "@/lib/ack";
-import { ensureKokoroLoading, getVoiceEngine } from "@/lib/tts";
 import { clampHistoryText, keepTail, stripAckEcho, stripSpeechTags } from "@/lib/speakable";
 import {
   acceptSpeculation,
   countWords,
   decideListenAction,
   PAUSE_END_MS,
+  pauseNeededMs,
   shouldSpeculate,
   type ListenSnapshot,
 } from "@/lib/conversation";
@@ -49,9 +68,9 @@ const HR_PERSONA: Persona = { name: "Haris", title: "AI interviewer · HR round"
 /** Setup-page extras (pinned sessionStorage keys) read ONCE at hook init and
  * sent on EVERY /api/interview body — live, speculative, and opening — so the
  * interviewer brain knows the candidate. Any parse failure means absent. */
-function readInterviewExtras(): { profile?: ResumeProfile; codeLanguage?: CodeLanguage; bargeIn: boolean } {
-  if (typeof window === "undefined") return { bargeIn: false };
-  const extras: { profile?: ResumeProfile; codeLanguage?: CodeLanguage; bargeIn: boolean } = { bargeIn: false };
+function readInterviewExtras(): { profile?: ResumeProfile; codeLanguage?: CodeLanguage } {
+  if (typeof window === "undefined") return {};
+  const extras: { profile?: ResumeProfile; codeLanguage?: CodeLanguage } = {};
   try {
     const raw = window.sessionStorage.getItem("pds_resume_profile");
     if (raw) extras.profile = JSON.parse(raw) as ResumeProfile;
@@ -62,20 +81,48 @@ function readInterviewExtras(): { profile?: ResumeProfile; codeLanguage?: CodeLa
       extras.codeLanguage = lang;
     }
   } catch {}
-  try {
-    // Barge-in (interrupting the interviewer while she speaks) is OFF by
-    // default: without headphones, room noise and her own voice through the
-    // speakers would cut her off mid-question. Opt in on the setup screen.
-    extras.bargeIn = window.sessionStorage.getItem("pds_barge_in") === "1";
-  } catch {}
   return extras;
 }
 
-/** A streamed turn's already-in-flight first utterance (voice pipelining). */
+/** The room's own barge-in preference, remembered for the visit. */
+const BARGE_IN_KEY = "pds_barge_in_room";
+
+/** May the candidate interrupt the interviewer? ON by default.
+ *
+ * A real interview is interruptible. Waiting out every question with a dead mic
+ * was the most artificial thing this room did, and it cost more than realism:
+ * with the mic closed until she finished, the first words of an answer that
+ * started a beat early were simply never captured. What makes ON safe on
+ * speakers is not optimism — it is the five echo defenses in lib/barge-in.ts
+ * plus the echo cancellation the capture stream already asks for.
+ *
+ * The setup screen's older `pds_barge_in` flag is deliberately NOT consulted:
+ * that checkbox starts unchecked and is written on every start, so a stored "0"
+ * cannot tell "left alone" apart from "deliberately turned off" — honouring it
+ * would pin every candidate to the old behaviour forever. The opt-out that
+ * counts is the room's own toggle below, which is only ever written when the
+ * candidate actually flips it. */
+function readBargeIn(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    return window.sessionStorage.getItem(BARGE_IN_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+function writeBargeIn(on: boolean): void {
+  try {
+    window.sessionStorage.setItem(BARGE_IN_KEY, on ? "on" : "off");
+  } catch {}
+}
+
+/** A streamed turn's voice already in flight (sentence pipelining): the queue
+ * speaking the sentences the model has closed so far, and the streamer that
+ * knows exactly which text those were. */
 interface LiveSpeech {
-  handle: SpeakHandle;
-  /** Exactly what the first utterance is speaking — remainder anchor. */
-  spoken: string;
+  queue: SpeechQueue;
+  streamer: SentenceStreamer;
 }
 
 /** /api/score's answer cap — the SENT answer keeps the newest tail. */
@@ -88,6 +135,22 @@ const ALL_ACK_LINES = Object.values(ACK_TEXTS).flat();
 /** Escape hatch: flip to false to disable ALL speculative pre-generation
  * (opening pre-warm + mid-answer speculation). The normal path is untouched. */
 const SPECULATE = true;
+/** Speculative LLM calls per answer. Each is a full interviewer turn that is
+ * usually thrown away; two covers "one natural pause, then the real end". */
+const MAX_SPECULATIONS_PER_ANSWER = 2;
+/** Energy heard but no words yet: a batch transcriber (Whisper / cloud) is
+ * still working — hold this long before treating it as noise. */
+const TRANSCRIPT_LAG_GRACE_MS = 4000;
+/** Longest the mic check will wait on the engine probe before starting anyway. */
+const CAPABILITY_WAIT_MS = 1200;
+/** How long after the mic becomes the candidate's a newly transcribed segment
+ * is still treated as possibly HER voice. A batch transcriber returns a segment
+ * a few hundred ms after it was cut, so her tail can land just inside the
+ * answer; nothing the candidate says can get there that fast (they must speak,
+ * the VAD must cut on silence, and the audio must round-trip), so the window
+ * only ever collects echo candidates — and the overlap test still keeps every
+ * word that turns out to be theirs. */
+const ECHO_TAIL_GRACE_MS = 900;
 
 /** An in-flight speculative /api/interview call plus its pre-synthesized audio.
  * Used both for the opening pre-warm (empty history, basisWords 0) and for
@@ -152,10 +215,20 @@ export interface InterviewMachine {
   /** Partial transcript rescued when STT degraded mid-answer — seeds the textarea. */
   degradePrefill: string;
   error: string | null;
+  /** False when the error is a spent daily quota — retrying cannot help. */
+  retryable: boolean;
+  /** The round this machine is running. */
+  roundType: "hr" | "technical";
   /** True while the current question is answered in the code editor. */
   codingTurn: boolean;
   codingQuestion: CodingQuestion;
   persona: Persona;
+  /** Whether the candidate may interrupt the interviewer mid-sentence (default on). */
+  bargeIn: boolean;
+  /** Opt out (or back in) from the preroll screen; remembered for the visit. */
+  setBargeIn: (on: boolean) => void;
+  /** Whether the chosen voice can speak yet — the preroll holds Start on it. */
+  voiceWarmup: VoiceWarmup;
   beginMicCheck: () => void;
   confirmMicCheck: () => void;
   switchToTextMode: () => void;
@@ -189,12 +262,30 @@ export function useInterviewMachine(
   const [sessionPersisted, setSessionPersisted] = useState(true);
   const [degradePrefill, setDegradePrefill] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<"quota" | "throttle" | null>(null);
+  const [bargeIn, setBargeInState] = useState<boolean>(readBargeIn);
+  /** The voice the session settled on and whether it can speak yet. Only the
+   * on-device engine has a warm-up (a one-time model download); the preroll
+   * holds the Start button until it is ready, because a greeting spoken by the
+   * system voice while Kokoro was still arriving is exactly the "two voices"
+   * a first-time visitor used to hear (measured: 50 s of download, greeting
+   * and the whole second turn robotic, then a different voice). */
+  const [voiceWarmup, setVoiceWarmup] = useState<VoiceWarmup>({ engine: null, ready: false, progress: null });
+  /** True once resolveVoiceEngine() has answered for this visit. Until then
+   * the engine is UNKNOWN, and unknown must read as "not ready": the preroll
+   * renders synchronously while the probe is still in flight, and a Start
+   * clicked in that window (a scripted browser managed it in 560 ms) started
+   * the round on a voice that had not been chosen yet — greeting robotic,
+   * everything after it Kokoro. */
+  const voiceResolvedRef = useRef(false);
 
   const historyRef = useRef<HistoryEntry[]>([]);
   const turnsRef = useRef<Turn[]>([]);
   const answersRef = useRef<AnswerRecord[]>([]);
   const sttRef = useRef<SttSession | null>(null);
   const micCheckSttRef = useRef<SttSession | null>(null);
+  /** Mic check waiting on the engine probe — a second click must not open two. */
+  const micCheckStartingRef = useRef(false);
   const silenceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const speakRef = useRef<SpeakHandle | null>(null);
   const ackRef = useRef<AckHandle | null>(null);
@@ -213,8 +304,21 @@ export function useInterviewMachine(
   /** In-flight streaming interviewer fetch — cleanup aborts the SSE reader. */
   const streamAbortRef = useRef<AbortController | null>(null);
   /** Setup-page extras, read once (identical on every request this session). */
-  const extrasRef = useRef<{ profile?: ResumeProfile; codeLanguage?: CodeLanguage; bargeIn?: boolean } | null>(null);
+  const extrasRef = useRef<{ profile?: ResumeProfile; codeLanguage?: CodeLanguage } | null>(null);
   if (extrasRef.current === null) extrasRef.current = readInterviewExtras();
+  /** Barge-in as the long-lived callbacks see it (deliverTurn is memoized). */
+  const bargeInRef = useRef(bargeIn);
+  bargeInRef.current = bargeIn;
+  /** Transcript rescued from an engine that died mid-answer and re-opened on
+   * the fallback engine — prepended to whatever the new session hears. */
+  const seedTextRef = useRef("");
+  /** One silent engine swap per round (see handleListenDegrade). */
+  const engineSwappedRef = useRef(false);
+  /** Set when a live-mic session becomes the answer recorder: how many
+   * transcript segments it already held, the text she was speaking while they
+   * were heard, and how long her still-in-transit tail may keep joining that
+   * window. Everything inside it is echo-checked. */
+  const adoptedEchoRef = useRef<{ finals: number; echoRef: string; tailUntil: number } | null>(null);
   /** Opening pre-warm fired during preroll (deterministic empty-history call). */
   const openingRef = useRef<PrefetchedTurn | null>(null);
   const codingActiveRef = useRef(false);
@@ -226,13 +330,28 @@ export function useInterviewMachine(
   const scoreSeqRef = useRef<Map<number, number>>(new Map());
   const scoresRef = useRef<Map<number, RubricEntry>>(new Map());
   const tooShortRef = useRef<Set<number>>(new Set());
+  /** Scoring requests that failed outright — distinguishes "unscorable" from
+   * "the scoring service was down" on the report. */
+  const scoreFailuresRef = useRef(0);
   const pendingScoresRef = useRef<Promise<void>[]>([]);
+  /** Speculative calls fired for the CURRENT answer (capped). */
+  const specCountRef = useRef(0);
+  /** The interviewer line on screen before a nudge replaced it. */
+  const lastQuestionCaptionRef = useRef("");
+  /** The caption as currently rendered, readable from the silence ticker
+   * (an interval closure cannot see state). Captions follow the VOICE now, so
+   * after a barge-in the screen holds only the draw she actually spoke — the
+   * nudge must put THAT back, not the full turn text she never finished. */
+  const captionRef = useRef("");
+  captionRef.current = caption;
   const [scores, setScores] = useState<RubricEntry[]>([]);
   // Fresh-closure helpers assigned every render (see bottom of hook) so memoized
   // callbacks never capture a stale endAnswer — the exact bug class the
   // adversarial review confirmed in this file.
   const watchSilenceRef = useRef<(sess: SttSession) => void>(() => {});
   const adoptSessionRef = useRef<(sess: SttSession) => void>(() => {});
+  const beginListeningRef = useRef<(seed?: string) => void>(() => {});
+  const handleListenDegradeRef = useRef<(reason: string) => void>(() => {});
   // Conversation-dynamics state, reset per listening session by watchSilence.
   const nudgeCountRef = useRef(0);
   const lastNudgeTRef = useRef<number | null>(null);
@@ -243,6 +362,90 @@ export function useInterviewMachine(
       silenceTimerRef.current = null;
     }
   };
+
+  const setBargeIn = useCallback((on: boolean) => {
+    writeBargeIn(on);
+    setBargeInState(on);
+  }, []);
+
+  // Poll the warm-up while the candidate is in the mic check / preroll — the
+  // only time it can gate anything. A failed model unblocks too: the system
+  // voice is then the honest engine for the whole round, not a surprise later.
+  useEffect(() => {
+    if (phase !== "micCheck" && phase !== "preroll") return;
+    const tick = () => {
+      const engine = getVoiceEngine();
+      const status = kokoroStatus();
+      const ready = voiceResolvedRef.current && (engine !== "kokoro" || status === "ready" || status === "failed");
+      setVoiceWarmup((v) => {
+        const progress = engine === "kokoro" && !ready ? kokoroProgress() : null;
+        return v.engine === engine && v.ready === ready && v.progress === progress ? v : { engine, ready, progress };
+      });
+    };
+    tick();
+    const id = setInterval(tick, 300);
+    return () => clearInterval(id);
+  }, [phase]);
+
+  // ——— what the CANDIDATE said ———
+  //
+  // With the mic live through her question, the raw transcript can start with
+  // HER words: the recognizer hears the speakers, and a session adopted at the
+  // end of a turn carries whatever it picked up meanwhile. Every consumer —
+  // word counts, the endpointing decision, the speculative basis, the recorded
+  // answer — reads the transcript through these, never raw. The echo window
+  // closes at adoption (dropSelfEcho): a candidate who repeats the question's
+  // words while answering it keeps every one of them.
+
+  const candidateFinals = (st: SttState): string[] => {
+    const a = adoptedEchoRef.current;
+    return a ? dropSelfEcho(st.finalSegments, a.echoRef, a.finals) : st.finalSegments;
+  };
+
+  /** Let her still-in-transit tail into the echo window (see ECHO_TAIL_GRACE_MS).
+   * Called from the adopted session's own update callback, so a late segment is
+   * caught the instant it is promoted rather than a poll later. */
+  const extendEchoWindow = (st: SttState) => {
+    const a = adoptedEchoRef.current;
+    if (!a || Date.now() > a.tailUntil) return;
+    if (st.finalSegments.length > a.finals) {
+      adoptedEchoRef.current = { ...a, finals: st.finalSegments.length };
+    }
+  };
+
+  const candidateText = (st: SttState): string => {
+    const a = adoptedEchoRef.current;
+    // The unfinalized fragment gets the same treatment while it is still the
+    // one that was in flight at adoption — after that, a new final has been
+    // promoted and the window (which covers that slot) has taken over.
+    const interim =
+      a && st.finalSegments.length < a.finals && echoOverlap(st.interim, a.echoRef) >= ECHO_OVERLAP_THRESHOLD
+        ? ""
+        : st.interim;
+    const raw = [...candidateFinals(st), interim].join(" ").replace(/\s+/g, " ").trim();
+    // Nudge/ack lines played through the speakers land at the answer's edges
+    // with no echo filter of their own — scrub them too.
+    return stripAckEcho(raw, ALL_ACK_LINES).trim();
+  };
+
+  /** Point the NEXT voice attempt at a different engine after `reason` killed
+   * the current one; false when nothing else could do better. Session-only
+   * (setSttEngineEphemeral): one flaky moment must never rewrite the stored
+   * preference. Routing a cloud outage back to the cloud would loop, so the
+   * engine that just failed is excluded by construction. */
+  const armFallbackEngine = useCallback((reason: string): boolean => {
+    // Not failures of the engine: the user chose text, or the MIC itself is
+    // denied — no other engine can hear through a blocked microphone.
+    if (reason === "user_choice" || reason === "not-allowed" || reason === "service-not-allowed" || reason === "audio-capture") {
+      return false;
+    }
+    const failed = pickSttEngine();
+    const next = nextSttEngine(failed);
+    if (!next || next === failed) return false;
+    setSttEngineEphemeral(next);
+    if (next === "whisper") ensureWhisperLoading();
+    return true;
+  }, []);
 
   const cleanup = useCallback(() => {
     endedRef.current = true;
@@ -270,6 +473,12 @@ export function useInterviewMachine(
   useEffect(() => {
     endedRef.current = false;
     startedRef.current = false;
+    // Asked for at mount, not at "Enable microphone": the engine the room will
+    // use depends on this answer, and the mic check must exercise the SAME
+    // engine the interview does — a check that passes on Chrome's recognizer
+    // proves nothing about the Whisper path that will actually run. Cached for
+    // the visit, so this is one GET.
+    void resolveSttCapabilities();
     return cleanup;
   }, [cleanup]);
 
@@ -278,27 +487,19 @@ export function useInterviewMachine(
     // fetch and the prepared audio don't dangle.
     specRef.current?.cancel();
     specRef.current = null;
-    // A network/unsupported failure means THIS BROWSER can't reach Google's
-    // speech service (Brave, Arc, plain Chromium, VPNs) — flip to the
-    // on-device Whisper engine and start its one-time download. Text mode
-    // covers the meantime; "Try microphone again" routes via Whisper once
-    // the badge says ready.
-    // Session-only switch: a transient outage must not permanently flip the
-    // stored preference (setSttEngine is reserved for explicit user choice).
-    if ((reason === "network" || reason === "unsupported") && getSttEngine() !== "whisper") {
-      setSttEngineEphemeral("whisper");
-      ensureWhisperLoading();
-    }
+    // Text mode covers the meantime; "Try microphone again" routes via whatever
+    // engine this arms, so the retry is never the engine that just failed.
+    armFallbackEngine(reason);
     textModeRef.current = true;
     setTextMode(true);
     setDegradeReason(reason);
-  }, []);
+  }, [armFallbackEngine]);
 
   /** ONE body shape for every interviewer request — live, speculative, and
    * opening — including the resume profile + code language extras. That
    * identity is what makes speculation acceptance sound. */
   const requestBody = useCallback(
-    (history: HistoryEntry[], stream: boolean) =>
+    (history: HistoryEntry[], stream: boolean, speculative = false) =>
       JSON.stringify({
         role,
         roundType,
@@ -309,6 +510,9 @@ export function useInterviewMachine(
         ...(extrasRef.current?.codeLanguage ? { codeLanguage: extrasRef.current.codeLanguage } : {}),
         history,
         ...(stream ? { stream: true } : {}),
+        // A pre-fetch against a partial answer: the server never commits it
+        // to long-term memory.
+        ...(speculative ? { speculative: true } : {}),
       }),
     [candidateName, resume, role, roundType],
   );
@@ -337,7 +541,7 @@ export function useInterviewMachine(
       spec.turnPromise = fetch("/api/interview", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: requestBody(history, false),
+        body: requestBody(history, false, true),
         signal: abort.signal,
       })
         .then((r) => (r.ok ? (r.json() as Promise<{ turn: InterviewerTurn }>) : null))
@@ -364,18 +568,30 @@ export function useInterviewMachine(
   // ——— mic check ———
 
   const beginMicCheck = useCallback(() => {
-    if (micCheckSttRef.current) return;
-    const sess = startStt({
-      onUpdate: (s: SttState) => {
-        setMicCheckTranscript(fullTranscript(s));
-        setHearing(s.lastSpeechT !== null && Date.now() - s.lastSpeechT < 900);
-      },
-      onDegrade: (reason) => {
-        micCheckSttRef.current = null;
-        degradeToText(reason);
-      },
+    if (micCheckSttRef.current || micCheckStartingRef.current) return;
+    micCheckStartingRef.current = true;
+    // The click is the user gesture that unlocks audio output; use it.
+    unlockAudio();
+    // Settle the engine choice first (mount already fired the probe, so this
+    // resolves immediately in practice); the timeout only covers a server that
+    // never answers, where the browser engines take over anyway.
+    void Promise.race([
+      resolveSttCapabilities(),
+      new Promise((r) => setTimeout(r, CAPABILITY_WAIT_MS)),
+    ]).then(() => {
+      micCheckStartingRef.current = false;
+      if (endedRef.current || micCheckSttRef.current) return;
+      micCheckSttRef.current = startStt({
+        onUpdate: (s: SttState) => {
+          setMicCheckTranscript(fullTranscript(s));
+          setHearing(s.lastSpeechT !== null && Date.now() - s.lastSpeechT < 900);
+        },
+        onDegrade: (reason) => {
+          micCheckSttRef.current = null;
+          degradeToText(reason);
+        },
+      });
     });
-    micCheckSttRef.current = sess;
   }, [degradeToText]);
 
   const confirmMicCheck = useCallback(() => {
@@ -383,21 +599,25 @@ export function useInterviewMachine(
       micCheckSttRef.current?.stop();
     } catch {}
     micCheckSttRef.current = null;
-    // Permission is granted by now — open the orb's true-amplitude mic tap,
-    // and pre-generate engine-native acks so they play instantly later.
+    // The click is a user gesture: unlock audio output now so the greeting
+    // can play the instant "Start" is pressed (autoplay policy).
+    unlockAudio();
+    // Permission is granted by now — open the orb's true-amplitude mic tap.
     if (!textModeRef.current) void startMicViz();
     resetAcks();
-    void prepareAcks(voiceForRound(roundType));
-    // Only warm the on-device Kokoro voice when it's actually the engine (no
-    // studio server). On a Chatterbox machine loading Kokoro is pointless and
-    // its ONNX runtime spams the console — so leave it off entirely there.
-    if (getVoiceEngine() === "kokoro") ensureKokoroLoading();
-    // Pre-warm the opening: the first interviewer call is deterministic (empty
-    // history), so fire it AND synthesize its audio during preroll — the
-    // greeting starts the instant the candidate clicks start.
-    if (SPECULATE && !openingRef.current) {
-      openingRef.current = prefetchTurn([], 0);
-    }
+    // Ask the server which voice/speech engines exist (cloud key? local studio
+    // server?) and settle on the best one BEFORE anything is synthesized —
+    // then pre-generate engine-native acks and pre-warm the opening line so
+    // the greeting starts the instant the candidate clicks start.
+    void resolveSttCapabilities();
+    void resolveVoiceEngine().then(() => {
+      voiceResolvedRef.current = true; // the preroll's Start may now judge readiness
+      if (endedRef.current) return;
+      void prepareAcks(voiceForRound(roundType));
+      if (SPECULATE && !openingRef.current) {
+        openingRef.current = prefetchTurn([], 0);
+      }
+    });
     setPhase("preroll");
   }, [prefetchTurn, roundType]);
 
@@ -409,9 +629,15 @@ export function useInterviewMachine(
     setTextMode(false);
     setDegradeReason(null);
     setMicCheckTranscript("");
-    if (phase === "listening") beginListening();
+    // Mid-answer: the words rescued when the engine died (the textarea's
+    // prefill) belong to THIS answer. Re-opening the mic with no seed threw
+    // them away — the candidate spoke for a minute, saw it land in the box,
+    // clicked "Try voice again", and the recorded answer started from the
+    // words they said next. The rescued trace is gone by now (beginListening
+    // clears it), but the text is what scoring and the next question read.
+    if (phase === "listening") beginListening(degradePrefill);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
+  }, [phase, degradePrefill]);
 
   const switchToTextMode = useCallback(() => {
     try {
@@ -419,12 +645,15 @@ export function useInterviewMachine(
     } catch {}
     micCheckSttRef.current = null;
     if (phase === "listening" && sttRef.current) {
-      // Same rescue as onDegrade: what was already spoken prefills the textarea.
+      // Same rescue as onDegrade: what was already spoken prefills the textarea
+      // — her echoed question scrubbed out of it, exactly as when the answer is
+      // recorded normally.
       clearSilenceTimer();
       const captured = sttRef.current.stop();
       sttRef.current = null;
-      setDegradePrefill(fullTranscript(captured));
-      pendingTraceRef.current = captured.trace;
+      setDegradePrefill([seedTextRef.current, candidateText(captured)].filter(Boolean).join(" ").trim());
+      seedTextRef.current = "";
+      pendingTraceRef.current = [...pendingTraceRef.current, ...captured.trace];
     }
     degradeToText("user_choice");
     if (phase === "micCheck") setPhase("preroll");
@@ -461,6 +690,7 @@ export function useInterviewMachine(
         avgMs: lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null,
       },
       overall: composeOverall(scoredEntries),
+      scoring: scoringStatus(scoredEntries.length, tooShortRef.current.size, scoreFailuresRef.current),
     };
     const { persisted } = saveSession(s);
     setSessionPersisted(persisted);
@@ -473,42 +703,49 @@ export function useInterviewMachine(
   const instantListRef = useRef<boolean[]>([]);
   const latenciesRef = () => latListRef.current;
 
-  const beginListening = useCallback(() => {
+  /** Open the mic for a fresh answer. `seed` is transcript rescued from an
+   * engine that just died mid-answer — it belongs to THIS answer and is
+   * prepended when the answer is recorded. */
+  const beginListening = useCallback((seed = "") => {
     if (endedRef.current) return;
     setLastSentence("");
     setDegradePrefill("");
     pendingTraceRef.current = [];
+    seedTextRef.current = seed;
+    adoptedEchoRef.current = null; // a fresh mic never heard her question
     answerStartTRef.current = Date.now();
     setPhase("listening");
     if (codingActiveRef.current) return; // code-editor path — no mic for this answer
     if (textModeRef.current) return; // textarea path — page renders the input
 
+    // Identity guard: a session that dies AFTER a newer one replaced it must
+    // not null out (and orphan) the live one.
+    const mine: { sess: SttSession | null; superseded: boolean } = { sess: null, superseded: false };
     const sess = startStt({
       onUpdate: (s: SttState) => {
-        const lastFinal = s.finalSegments[s.finalSegments.length - 1] ?? "";
-        setLastSentence(lastFinal);
+        const finals = candidateFinals(s);
+        setLastSentence(finals[finals.length - 1] ?? "");
         setHearing(s.lastSpeechT !== null && Date.now() - s.lastSpeechT < 900);
       },
       onDegrade: (reason) => {
-        clearSilenceTimer();
-        // Capture BEFORE discarding the session — 45 seconds of a spoken
-        // answer must not vanish because the recognizer died. The partial
-        // transcript prefills the textarea; the trace rides along so metrics
-        // still cover the spoken part.
-        const captured = sttRef.current?.getState();
-        sttRef.current = null;
-        if (captured) {
-          setDegradePrefill(fullTranscript(captured));
-          pendingTraceRef.current = captured.trace;
-        }
-        degradeToText(reason);
+        // An engine can degrade SYNCHRONOUSLY inside startStt (an unsupported
+        // recognizer, a start() that throws), and the rescue path re-enters
+        // this function on the fallback engine before startStt has even
+        // returned. Marking the attempt dead is what stops the assignments
+        // below from overwriting the session that replaced it.
+        mine.superseded = true;
+        if (mine.sess && sttRef.current !== mine.sess) return;
+        handleListenDegradeRef.current(reason);
       },
     });
+    if (mine.superseded) return; // a newer attempt already owns sttRef
     sttRef.current = sess;
+    mine.sess = sess;
     if (!sess) return;
     watchSilenceRef.current(sess);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [degradeToText]);
+  }, []);
+  beginListeningRef.current = beginListening;
 
   const fireScoring = useCallback((qid: number, question: string, combinedAnswer: string) => {
     const seq = (scoreSeqRef.current.get(qid) ?? 0) + 1;
@@ -520,7 +757,11 @@ export function useInterviewMachine(
       // stored transcript stays full.
       body: JSON.stringify({ questionId: qid, question, answer: keepTail(combinedAnswer, SCORE_ANSWER_MAX_CHARS) }),
     })
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => {
+        if (r.ok) return r.json();
+        scoreFailuresRef.current++;
+        return null;
+      })
       .then((d: { entry?: RubricEntry; tooShort?: boolean } | null) => {
         if (!d || scoreSeqRef.current.get(qid) !== seq) return; // stale response
         if (d.tooShort) tooShortRef.current.add(qid);
@@ -530,7 +771,9 @@ export function useInterviewMachine(
         }
         setScores([...scoresRef.current.values()].sort((a, b) => a.questionId - b.questionId));
       })
-      .catch(() => {}); // scoring is best-effort; the round never depends on it
+      .catch(() => {
+        scoreFailuresRef.current++; // scoring is best-effort; the round never depends on it
+      });
     pendingScoresRef.current.push(p);
   }, []);
 
@@ -598,7 +841,7 @@ export function useInterviewMachine(
   ) => {
     if (endedRef.current) {
       prepared?.cancel();
-      live?.handle.cancel();
+      live?.queue.cancel();
       return;
     }
 
@@ -607,19 +850,36 @@ export function useInterviewMachine(
     const cleanText = stripSpeechTags(turn.text);
     historyRef.current.push({ speaker: "interviewer", text: clampHistoryText(cleanText) });
     const tStart = Date.now();
-    setCaption(cleanText);
+    // CAPTIONS FOLLOW THE VOICE, never the token stream.
+    //
+    // The model finishes writing a turn seconds before the voice finishes
+    // saying it, so putting the text on screen as it generates meant the
+    // candidate had read the whole question before the interviewer had spoken a
+    // word. That reads as "the voice is lagging" even when the audio is on
+    // time, and it removes any reason to listen. A streamed turn is captioned
+    // draw by draw by the speech queue (see onSpeaking in streamTurn); a
+    // whole-turn utterance is captioned below, when its audio actually starts.
+    lastQuestionCaptionRef.current = cleanText;
     // A conversational turn — answering them, reassuring them, correcting them —
     // carries questionIndex 0 and must NOT rewind the progress display. Only a
     // turn that belongs to a topic moves it.
-    if (turn.questionIndex > 0) setQuestionIndex(turn.questionIndex);
+    // …and it never moves BACKWARDS either. The index is the model's own label
+    // and it is noisy: a live round produced 5 → 4 → 5 → 3 across four turns,
+    // and the scripted rescue (which cannot see the model's labels at all)
+    // restarts its count from the answers it can attribute. Progress that
+    // visibly rewinds reads as the interviewer losing their place; scoring
+    // groups answers by this id, so a rewind would also file a new question's
+    // answer under an old one.
+    if (turn.questionIndex > 0) setQuestionIndex((i) => Math.max(i, turn.questionIndex));
     codingActiveRef.current = Boolean(turn.coding);
     setCodingTurn(Boolean(turn.coding));
     // Track which main question the next answer belongs to (scoring identity):
     // a follow-up keeps the parent question's id and text.
     // Ids clamped to /api/score's cap — deep-dive rounds can outrun it.
     if (turn.type === "question") {
+      const prevId = currentQuestionRef.current?.id ?? 0;
       currentQuestionRef.current = {
-        id: Math.min(MAX_QUESTION_ID, turn.questionIndex || (currentQuestionRef.current?.id ?? 0) + 1),
+        id: Math.min(MAX_QUESTION_ID, Math.max(prevId, turn.questionIndex || prevId + 1)),
         text: cleanText,
       };
     } else if (turn.type === "followup" && currentQuestionRef.current === null) {
@@ -637,28 +897,35 @@ export function useInterviewMachine(
     // guard, or the next question speaks over the home page.
     if (endedRef.current) {
       prepared?.cancel();
-      live?.handle.cancel();
+      live?.queue.cancel();
       return;
     }
 
-    // Streamed-rescue consistency: if the final turn's text does not contain
-    // the sentence the voice pipeline already spoke (a rescue swapped the
-    // text), the audio is wrong — kill it and speak the real turn in full so
-    // voice, caption, history, and scoring always agree.
+    // Streamed-rescue consistency: the sentences already spoken must be a
+    // prefix of the final turn text. If a rescue swapped the text mid-way,
+    // the audio is wrong — kill it and speak the real turn in full so voice,
+    // caption, history, and scoring always agree. Otherwise hand the queue
+    // whatever the model wrote after the last closed sentence and close it.
     let liveSrc = live ?? null;
-    if (liveSrc && !turn.text.includes(liveSrc.spoken)) {
-      liveSrc.handle.cancel();
-      liveSrc = null;
+    if (liveSrc) {
+      const { rest, mismatch } = liveSrc.streamer.flush(turn.text);
+      if (mismatch) {
+        liveSrc.queue.cancel();
+        liveSrc = null;
+      } else {
+        liveSrc.queue.push(rest);
+        liveSrc.queue.end();
+      }
     }
     // SINGLE-VOICE INVARIANT: whatever is still speaking dies before the new
     // utterance starts — two interviewer voices at once is never acceptable,
     // no matter which orchestration path slipped.
-    if (speakRef.current && speakRef.current !== liveSrc?.handle) speakRef.current.cancel();
-    // One handle, three sources: a streamed turn chains the remainder after
-    // its already-speaking first sentence (cancel covers both utterances);
-    // prepared (speculative) audio schedules instantly; otherwise live speak().
-    const handle = liveSrc
-      ? chainSpeak(liveSrc.handle, remainderAfter(turn.text, liveSrc.spoken), { voice: voiceForRound(roundType) })
+    if (speakRef.current && speakRef.current !== liveSrc?.queue) speakRef.current.cancel();
+    // One handle, three sources: a streamed turn's sentence queue (already
+    // talking, cancel covers every sentence); prepared (speculative) audio
+    // schedules instantly; otherwise live speak().
+    const handle: SpeakHandle = liveSrc
+      ? liveSrc.queue
       : prepared
         ? prepared.play()
         : speak(turn.text, { voice: voiceForRound(roundType) });
@@ -667,6 +934,17 @@ export function useInterviewMachine(
     handle.firstSyllableAt.then((t) => {
       ttsTurnStartRef.current = t;
     });
+    // Whole-turn utterance (speculative or non-streamed): one draw, so the
+    // caption is the whole line and it lands with the first syllable. The
+    // streamed path is already captioning itself draw by draw — writing the
+    // full text here would jump ahead of the voice again. firstSyllableAt
+    // always resolves, even when synthesis failed outright, so a silent
+    // interviewer still shows her line rather than nothing.
+    if (!liveSrc) {
+      handle.firstSyllableAt.then(() => {
+        if (!endedRef.current) setCaption(cleanText);
+      });
+    }
 
     // Latency = student's last word → interviewer's first syllable (plan anchor).
     // A TTS fallback off the primary chain (chatterbox/elevenlabs/kokoro) still
@@ -690,39 +968,67 @@ export function useInterviewMachine(
       });
     }
 
-    // Real-time conversation: the mic stays LIVE while Priya speaks. Sustained,
+    // Real-time conversation: the mic stays LIVE while she speaks. Sustained,
     // non-echo candidate speech cancels her mid-sentence (barge-in — she stops
     // and listens like a real interviewer); a quieter early start is captured
-    // and becomes the beginning of the answer instead of being lost.
+    // and becomes the beginning of the answer instead of being lost; and when
+    // she finishes uninterrupted, this same session simply CARRIES ON as the
+    // answer recorder (see below) — no getUserMedia + AudioContext round-trip
+    // between her last syllable and the mic being able to hear anything.
     const promo = { promoted: false };
+    // The live interrupt listener, if any. Held in an object because the
+    // onUpdate closure below is created before startStt returns.
+    const holder: { sess: SttSession | null } = { sess: null };
     // Echo filter reference = the turn text PLUS every ack/nudge line the app
     // itself speaks — self-audio must always be filtered, never an interrupt.
-    const echoRefText = `${turn.text} ${Object.values(ACK_TEXTS).flat().join(" ")}`;
-    // Barge-in OFF by default: she speaks the FULL question uninterrupted, then
-    // the mic opens (post-TTS beginListening). Only run the live interrupt
-    // listener when the candidate opted in (headphones) — otherwise external
-    // noise cutting her off mid-question means they never hear it.
-    if (extrasRef.current?.bargeIn && !textModeRef.current && !turn.done && !turn.coding) {
-      const holder: { sess: SttSession | null } = { sess: null };
+    const echoRefText = `${turn.text} ${ALL_ACK_LINES.join(" ")}`;
+
+    /** Hand this live session to the answer, recording the echo window first:
+     * everything it heard up to now was heard WHILE she was speaking, so any of
+     * it that overlaps her line is her voice through the speakers and must
+     * never be filed as the candidate's answer. The unfinalized fragment counts
+     * as one more slot — it is promoted to a segment at stop(). */
+    const adoptLiveMic = (sess: SttSession) => {
+      const st = sess.getState();
+      adoptedEchoRef.current = {
+        finals: st.finalSegments.length + (st.interim.trim() ? 1 : 0),
+        echoRef: echoRefText,
+        tailUntil: Date.now() + ECHO_TAIL_GRACE_MS,
+      };
+      promo.promoted = true;
+      adoptSessionRef.current(sess);
+    };
+
+    // Barge-in is ON by default now (opt out on the preroll screen). Never on
+    // the closing turn or a coding question: there is nothing to interrupt with.
+    if (bargeInRef.current && !textModeRef.current && !turn.done && !turn.coding) {
+      // The warm-up window guards the MIC opening (recognizer flush, speaker
+      // pop, the ack's tail) as much as the voice starting. On a streamed turn
+      // the voice has usually been going since before deliverTurn ran — draw 1
+      // starts while the model is still writing — so measured from the first
+      // syllable alone the window could already be spent the instant the mic
+      // opens. Anchor on whichever happened LATER.
+      const micOpenedAt = Date.now();
       holder.sess = startStt({
         onUpdate: (s: SttState) => {
           setHearing(s.lastSpeechT !== null && Date.now() - s.lastSpeechT < 900);
           if (promo.promoted) {
-            const lastFinal = s.finalSegments[s.finalSegments.length - 1] ?? "";
-            setLastSentence(lastFinal);
+            extendEchoWindow(s);
+            const finals = candidateFinals(s);
+            setLastSentence(finals[finals.length - 1] ?? "");
             return;
           }
           const heard = fullTranscript(s);
-          const msSince = ttsTurnStartRef.current === null ? 0 : Date.now() - ttsTurnStartRef.current;
+          const now = Date.now();
+          const msSince = ttsTurnStartRef.current === null ? 0 : Math.min(now - ttsTurnStartRef.current, now - micOpenedAt);
           if (
             holder.sess &&
             !endedRef.current &&
             decideBargeIn({ heardText: heard, spokenText: echoRefText, msSinceTtsStart: msSince }) === "interrupt"
           ) {
-            promo.promoted = true;
             interruptSttRef.current = null;
             handle.cancel();
-            adoptSessionRef.current(holder.sess);
+            adoptLiveMic(holder.sess);
           }
         },
         onDegrade: (reason) => {
@@ -733,14 +1039,13 @@ export function useInterviewMachine(
             interruptSttRef.current = null;
             return;
           }
-          clearSilenceTimer();
-          const captured = sttRef.current?.getState();
-          sttRef.current = null;
-          if (captured) {
-            setDegradePrefill(fullTranscript(captured));
-            pendingTraceRef.current = captured.trace;
-          }
-          degradeToText(reason);
+          // Identity guard, same as beginListening's: once adopted this
+          // session is sttRef, and only while it still is may its death rescue
+          // "the current answer". A late degrade after endAnswer already moved
+          // on would otherwise capture a NEWER session's transcript as this
+          // answer's partial and re-open a second mic under it.
+          if (sttRef.current !== holder.sess) return;
+          handleListenDegradeRef.current(reason);
         },
       });
       interruptSttRef.current = holder.sess;
@@ -758,30 +1063,78 @@ export function useInterviewMachine(
       const isess = interruptSttRef.current;
       interruptSttRef.current = null;
       if (isess) {
-        const heard = fullTranscript(isess.getState());
-        if (heard.trim() && echoOverlap(heard, turn.text) < ECHO_OVERLAP_THRESHOLD) {
-          // Early start: the candidate began answering before Priya finished.
-          adoptSessionRef.current(isess);
-          return;
-        }
-        try {
-          isess.stop(); // echo or noise — discard
-        } catch {}
+        // She finished; the mic has been open the whole time. KEEP this session
+        // as the answer recorder instead of stopping it and opening a new one:
+        // that teardown/startup is a real gap (getUserMedia + AudioContext) and
+        // it lands exactly where candidates start talking, so its cost is the
+        // first words of the answer. Adoption is unconditional now — what the
+        // old code was really guarding against (her voice being filed as their
+        // answer) is handled properly by the echo window adoptLiveMic records,
+        // which drops HER lines segment by segment instead of judging the whole
+        // transcript at once and keeping every word of it when the candidate's
+        // early start diluted the ratio.
+        adoptLiveMic(isess);
+        return;
       }
       beginListening();
     }
-  }, [beginListening, degradeToText, finishInterview, roundType]);
+  }, [beginListening, finishInterview, roundType]);
 
   /** One streaming attempt (stream:true → SSE). The display-first pipeline:
    * text events set the caption WHILE phase is still 'thinking' — the user
-   * watches the reply type out during generation — and the moment the first
-   * sentence completes, TTS starts on it (voice pipelining; phase flips to
-   * 'speaking' only when audio actually starts). Resolves with the final turn
-   * plus the in-flight first utterance; throws on ANY failure with that
-   * utterance already cancelled (the caller falls back to one non-stream POST). */
+   * watches the reply type out during generation — and the moment a sentence
+   * closes, it is handed to the speech queue (sentence pipelining): the
+   * interviewer starts talking while the model is still writing, and the next
+   * sentence synthesizes while the current one plays. Phase flips to
+   * 'speaking' when audio actually starts. Resolves with the final turn plus
+   * the in-flight queue; throws on ANY failure with the queue already
+   * cancelled (the caller falls back to one non-stream POST). */
   const streamTurn = useCallback(async (): Promise<{ turn: InterviewerTurn; live: LiveSpeech | null }> => {
     const abort = new AbortController();
     streamAbortRef.current = abort;
+    const streamer = new SentenceStreamer();
+    // Holder (not a bare `let`): the queue is created inside a callback, and
+    // TypeScript's flow analysis would otherwise narrow it to `null` at the
+    // catch below.
+    const voice: { queue: SpeechQueue | null } = { queue: null };
+    const onStreamText = (text: string) => {
+      // No setCaption here on purpose — see the caption note in deliverTurn.
+      // The reply is captioned by the speech queue as each draw starts speaking.
+      const { sentences, reset } = streamer.feed(text);
+      if (reset && voice.queue) {
+        // The text stopped being an extension of what was spoken (a rescue
+        // replaced the reply mid-stream) — restart the voice from scratch.
+        voice.queue.cancel();
+        voice.queue = null;
+      }
+      if (sentences.length === 0) return;
+      if (!voice.queue) {
+        // SINGLE-VOICE INVARIANT — nothing else may be talking when the reply
+        // starts. The ack (if still playing) gates the first sentence instead
+        // of being cut off; the queue waits for it.
+        if (speakRef.current) speakRef.current.cancel();
+        const q = createSpeechQueue({
+          voice: voiceForRound(roundType),
+          gate: ackRef.current?.done ?? null,
+          // Each draw appears on screen when ITS audio starts, so the caption
+          // grows at speaking pace instead of arriving all at once. Tags are
+          // stripped here too: [chuckle] is an instruction to Chatterbox, never
+          // something the candidate should read.
+          onSpeaking: (spoken, index) => {
+            if (endedRef.current) return;
+            const clean = stripSpeechTags(spoken);
+            if (!clean) return;
+            setCaption((prev) => (index === 0 ? clean : `${prev} ${clean}`.trim()));
+          },
+        });
+        voice.queue = q;
+        speakRef.current = q;
+        q.firstSyllableAt.then(() => {
+          if (!endedRef.current) setPhase((p) => (p === "thinking" ? "speaking" : p));
+        });
+      }
+      for (const s of sentences) voice.queue.push(s);
+    };
     try {
       const res = await fetch("/api/interview", {
         method: "POST",
@@ -818,13 +1171,9 @@ export function useInterviewMachine(
             continue;
           }
           // Display-first: the reply TYPES OUT here while she still "thinks"
-          // (captions are always rendered — a11y + text-before-voice). The
-          // voice is deliberately NOT split across sentences: speaking the
-          // first sentence early then the rest separately produced audible
-          // gaps whenever the streamed and final text didn't line up exactly,
-          // which read as her being cut off mid-question. deliverTurn now
-          // speaks the COMPLETE question once, as a single clean utterance.
-          setCaption(stripSpeechTags(ev.text));
+          // (captions are always rendered — a11y + text-before-voice), and
+          // every closed sentence goes straight to the voice.
+          onStreamText(ev.text);
         }
         if (turn) {
           void reader.cancel().catch(() => {});
@@ -833,9 +1182,15 @@ export function useInterviewMachine(
         if (done) break;
       }
       if (!turn) throw new Error("stream_no_turn");
-      // Voice is never split — deliverTurn speaks the whole question once.
-      return { turn, live: null };
+      // A turn without a single closed sentence yet (short reply) is spoken
+      // whole by deliverTurn; otherwise the queue carries on with the tail.
+      return { turn, live: voice.queue ? { queue: voice.queue, streamer } : null };
     } catch (err) {
+      const q = voice.queue;
+      if (q) {
+        q.cancel();
+        if (speakRef.current === q) speakRef.current = null;
+      }
       throw err;
     } finally {
       if (streamAbortRef.current === abort) streamAbortRef.current = null;
@@ -847,6 +1202,7 @@ export function useInterviewMachine(
     setPhase("thinking");
     setCaption(""); // last turn's line must not linger while the next streams in
     setError(null);
+    setErrorKind(null);
     // Streaming-first. ANY streaming failure (error event, network, malformed)
     // falls back to exactly ONE non-stream POST — today's path below, which
     // carries the route's retry-once policy — so the interview never dies.
@@ -855,7 +1211,7 @@ export function useInterviewMachine(
     try {
       const { turn, live } = await streamTurn();
       if (endedRef.current) {
-        live?.handle.cancel();
+        live?.queue.cancel();
         return;
       }
       await deliverTurn(turn, null, false, live);
@@ -879,7 +1235,11 @@ export function useInterviewMachine(
             .json()
             .then((d: { message?: unknown }) => (typeof d?.message === "string" ? d.message : null))
             .catch(() => null);
-          if (msg && !endedRef.current) setError(msg);
+          if (msg && !endedRef.current) {
+            setError(msg);
+            // A spent daily quota is a dead end; a "slow down" is not.
+            setErrorKind(/budget|quota|tomorrow/i.test(msg) ? "quota" : "throttle");
+          }
         }
         throw new Error(`api_${res.status}`);
       }
@@ -900,6 +1260,9 @@ export function useInterviewMachine(
     const sess = sttRef.current;
     sttRef.current = null;
     if (!sess) return;
+    // Immediate feedback: the settle wait below (up to seconds on a batch
+    // transcriber) must not look like an ignored click.
+    setPhase("thinking");
     // Speak the ack immediately (the latency mask), then let Chrome finalize
     // buffered audio — the last words of the answer arrive AFTER stop().
     speakAck();
@@ -909,10 +1272,18 @@ export function useInterviewMachine(
     // (clearSilenceTimer above), so no fresher one can appear underneath us.
     const spec = specRef.current;
     specRef.current = null;
-    const transcript = fullTranscript(st);
+    // Her own question, heard through the speakers while the mic was live, is
+    // dropped here — it is the one thing that must never be filed as the
+    // candidate's answer. A rescued partial from an engine that died mid-answer
+    // is prepended; its trace is merged so delivery metrics stay complete.
+    const transcript = [seedTextRef.current, candidateText(st)].filter(Boolean).join(" ").trim();
+    const trace = [...pendingTraceRef.current, ...st.trace];
+    seedTextRef.current = "";
+    pendingTraceRef.current = [];
+    adoptedEchoRef.current = null;
     // The FINAL transcript goes to history/answers — scoring and the LLM's
     // next call always see the truth, never the speculative partial.
-    recordAnswer(transcript, st.trace, st.lastSpeechT ?? Date.now());
+    recordAnswer(transcript, trace, st.lastSpeechT ?? Date.now());
     if (spec && !spec.cancelled && acceptSpeculation(spec.basisWords, countWords(transcript))) {
       // The candidate barely added words after the speculative basis: the
       // cached turn is still the right reply — skip the live LLM call and play
@@ -948,6 +1319,7 @@ export function useInterviewMachine(
       // part — merge it so delivery metrics survive the degrade.
       recordAnswer(text, pendingTraceRef.current, Date.now());
       pendingTraceRef.current = [];
+      seedTextRef.current = ""; // the textarea already carries whatever was rescued
       setDegradePrefill("");
       speakAck();
       void callInterviewer();
@@ -964,31 +1336,88 @@ export function useInterviewMachine(
     else setVizMode("idle");
   }, [phase, textMode]);
 
+  /** A nudge line through the normal voice — for engines with no cached
+   * native ack. A caption that was never spoken reads as the interviewer
+   * silently swapping the question, so the line is always audible. */
+  const spokenNudge = (kind: AckKind): AckHandle => {
+    const text = ACK_TEXTS[kind][0];
+    const h = speak(text, { voice: voiceForRound(roundType) });
+    return { done: h.done, cancel: () => h.cancel(), firstSyllableAt: h.firstSyllableAt, text };
+  };
+
   // Assigned every render so these closures always see the CURRENT endAnswer —
   // memoized callbacks call through the ref instead of capturing directly.
+
+  /** The answer recorder died mid-answer. Rescue what it heard, then try to
+   * KEEP THE ROUND SPOKEN: one silent swap onto the next engine re-opens the
+   * mic with the partial carried over, which matters far more now that the
+   * default engine is a network service — a single Groq hiccup used to turn a
+   * voice interview into a typing exercise. A second failure has earned text
+   * mode, and the rescued words prefill the textarea as before. */
+  handleListenDegradeRef.current = (reason: string) => {
+    clearSilenceTimer();
+    // Capture BEFORE discarding the session — 45 seconds of a spoken answer
+    // must not vanish because the recognizer died.
+    const captured = sttRef.current?.getState();
+    sttRef.current = null;
+    const partial = [seedTextRef.current, captured ? candidateText(captured) : ""]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    if (!engineSwappedRef.current && armFallbackEngine(reason)) {
+      engineSwappedRef.current = true;
+      beginListeningRef.current(partial);
+      // Order matters: beginListening clears the trace buffer, and the dead
+      // engine's trace describes real speech this answer — endAnswer merges it.
+      if (captured) pendingTraceRef.current = captured.trace;
+      return;
+    }
+    seedTextRef.current = "";
+    if (partial) setDegradePrefill(partial);
+    // The trace rides along so delivery metrics still cover the spoken part.
+    if (captured) pendingTraceRef.current = captured.trace;
+    degradeToText(reason);
+  };
+
   watchSilenceRef.current = (sess: SttSession) => {
     clearSilenceTimer();
     // Defensive: a speculation from a previous answer must never survive into
     // a fresh listening session (endAnswer normally consumed it already).
     specRef.current?.cancel();
     specRef.current = null;
+    specCountRef.current = 0;
     nudgeCountRef.current = 0;
     lastNudgeTRef.current = null;
     const listenStartT = Date.now();
     silenceTimerRef.current = setInterval(() => {
       const st = sess.getState();
       const now = Date.now();
+      // Words the CANDIDATE said: her question and her own nudge lines re-heard
+      // through the speakers are scrubbed, so an echoed "Mm-hm — go on?" can
+      // neither count as an answer nor end one.
+      const said = candidateText(st);
+      const words = countWords(said);
       let msSinceLastSpeech: number | null = null;
       if (st.lastSpeechT !== null) {
         // A nudge refreshes the pause anchor: the candidate gets a full fresh
         // window to react instead of being cut off on the very next tick.
-        msSinceLastSpeech = now - Math.max(st.lastSpeechT, lastNudgeTRef.current ?? 0);
+        const anchor = Math.max(st.lastSpeechT, lastNudgeTRef.current ?? 0);
+        if (words > 0) msSinceLastSpeech = now - anchor;
+        // Energy heard but no words yet: a batch transcriber is still working
+        // on it — hold rather than nudge into it. Past the grace window it
+        // was echo or noise, and the silence policy applies.
+        else if (now - anchor < TRANSCRIPT_LAG_GRACE_MS) msSinceLastSpeech = 0;
       }
       const snapshot: ListenSnapshot = {
         msSinceListenStart: now - listenStartT,
         msSinceLastSpeech,
-        words: countWords(fullTranscript(st)),
+        words,
         nudges: nudgeCountRef.current,
+        // Endpointing follows the WORDS, not a stopwatch: trailing off on "and"
+        // or "um" buys the candidate more room than the old flat floor gave
+        // them, while a finished sentence — or an out-loud "that's it" — hands
+        // the turn back sooner. That difference is most of the dead air.
+        pauseNeededMs: pauseNeededMs(said),
       };
       const action = decideListenAction(snapshot);
       if (action === "wait") {
@@ -1001,10 +1430,11 @@ export function useInterviewMachine(
           SPECULATE &&
           !textModeRef.current &&
           !codingActiveRef.current &&
+          specCountRef.current < MAX_SPECULATIONS_PER_ANSWER &&
           shouldSpeculate(snapshot, specRef.current?.basisWords ?? null)
         ) {
           specRef.current?.cancel();
-          const partial = fullTranscript(st).trim();
+          const partial = said;
           // Same history the real call would send, except the answer text is
           // the partial — recordAnswer later pushes the FINAL text, so an
           // accepted turn's NEXT call still sees the truth.
@@ -1012,6 +1442,7 @@ export function useInterviewMachine(
             [...historyRef.current, { speaker: "candidate", text: clampHistoryText(partial) }],
             snapshot.words,
           );
+          specCountRef.current++;
         }
         return;
       }
@@ -1029,18 +1460,30 @@ export function useInterviewMachine(
       lastNudgeTRef.current = now;
       const kind: AckKind = action === "offer_rephrase" ? "rephrase" : "encourage";
       ackRef.current?.cancel(); // never two acks at once
-      const h = playAck(kind);
+      const h = playAck(kind) ?? spokenNudge(kind);
       ackRef.current = h;
-      setCaption(h?.text ?? ACK_TEXTS[kind][0]);
-      // Re-anchor at playback end so the reaction window excludes the nudge audio.
-      h?.done.then(() => {
+      // What is on screen right now is what she said; the full turn text is
+      // the fallback for a caption that never landed (a silent engine).
+      const questionCaption = captionRef.current || lastQuestionCaptionRef.current;
+      // The nudge's caption lands with its AUDIO, like every other line. A
+      // cached ack starts at once; a live one (Kokoro) took ~1.4 s to render in
+      // the browser run, and the text sitting there first read as the
+      // interviewer silently swapping the question before speaking.
+      h.firstSyllableAt.then(() => {
+        if (!endedRef.current && ackRef.current === h) setCaption(h.text);
+      });
+      // Re-anchor at playback end so the reaction window excludes the nudge
+      // audio, and put the question back on screen.
+      h.done.then(() => {
         lastNudgeTRef.current = Date.now();
+        setCaption((c) => (c === h.text ? questionCaption : c));
       });
     }, 250);
   };
   adoptSessionRef.current = (sess: SttSession) => {
     setDegradePrefill("");
     pendingTraceRef.current = [];
+    seedTextRef.current = "";
     setLastSentence("");
     answerStartTRef.current = Date.now();
     sttRef.current = sess;
@@ -1078,6 +1521,8 @@ export function useInterviewMachine(
   }, [callInterviewer, deliverTurn]);
 
   const retryConnection = useCallback(() => {
+    setError(null);
+    setErrorKind(null);
     void callInterviewer();
   }, [callInterviewer]);
 
@@ -1112,8 +1557,13 @@ export function useInterviewMachine(
       codingSeedFrom(candidateName, historyRef.current),
     ),
     persona: roundType === "technical" ? TECH_PERSONA : HR_PERSONA,
+    bargeIn,
+    setBargeIn,
+    voiceWarmup,
+    roundType,
     degradePrefill,
     error,
+    retryable: errorKind !== "quota",
     beginMicCheck,
     confirmMicCheck,
     switchToTextMode,

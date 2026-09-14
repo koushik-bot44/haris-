@@ -134,4 +134,53 @@ describe("session store", () => {
     expect(store.loadSessions().map((s) => s._id)).toEqual(["mem"]);
     expect(store.getSession("mem")?._id).toBe("mem");
   });
+
+  it("a quota failure shrinks the stored list and retries instead of giving up", async () => {
+    const { map } = stubBrowser();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+    // Storage that refuses anything over ~12 sessions' worth of bytes.
+    const realSet = (k: string, v: string) => map.set(k, v);
+    const limit = JSON.stringify(Array.from({ length: 12 }, (_, i) => makeSession(`s${i}`, i))).length;
+    (globalThis as unknown as { window: { localStorage: { setItem: (k: string, v: string) => void } } }).window.localStorage.setItem = (
+      k: string,
+      v: string,
+    ) => {
+      if (k === KEY && v.length > limit) throw new Error("QuotaExceededError");
+      realSet(k, v);
+    };
+    const store = await freshStore();
+    for (let i = 0; i < 20; i++) expect(store.saveSession(makeSession(`s${i}`, i)).persisted).toBe(true);
+    const all = store.loadSessions();
+    expect(all.length).toBeLessThanOrEqual(12);
+    expect(all[all.length - 1]._id).toBe("s19"); // the newest round always survives
+  });
+
+  it("memory-only rounds still appear in loadSessions when storage is otherwise healthy", async () => {
+    const { map } = stubBrowser();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+    let failNext = false;
+    const realSet = (k: string, v: string) => map.set(k, v);
+    (globalThis as unknown as { window: { localStorage: { setItem: (k: string, v: string) => void } } }).window.localStorage.setItem = (
+      k: string,
+      v: string,
+    ) => {
+      if (k === KEY && failNext) throw new Error("quota");
+      realSet(k, v);
+    };
+    const store = await freshStore();
+    expect(store.saveSession(makeSession("stored")).persisted).toBe(true);
+    failNext = true;
+    expect(store.saveSession(makeSession("memory-only")).persisted).toBe(false);
+    expect(store.loadSessions().map((s) => s._id)).toEqual(["stored", "memory-only"]);
+  });
+
+  it("drops entries whose nested shapes would crash the report views", async () => {
+    const { map } = stubBrowser();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+    const bad = { ...makeSession("bad-scores"), perQuestionScores: [{ questionId: 1, question: "q", answerTranscript: "a", scores: { relevance: "x" } }] };
+    const badOverall = { ...makeSession("bad-overall"), overall: null };
+    map.set(KEY, JSON.stringify([makeSession("good"), bad, badOverall]));
+    const store = await freshStore();
+    expect(store.loadSessions().map((s) => s._id)).toEqual(["good"]);
+  });
 });

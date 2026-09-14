@@ -43,7 +43,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: INVALID }, { status: 401 });
   }
 
-  const token = await signSession({ id: user.id, name: user.name });
+  let token: string;
+  try {
+    token = await signSession({ id: user.id, name: user.name });
+  } catch (err) {
+    console.error("[auth] could not sign session:", err instanceof Error ? err.message : err);
+    return NextResponse.json({ error: "could not sign you in" }, { status: 503 });
+  }
   const res = NextResponse.json(
     { user: { id: user.id, name: user.name, email: user.email } },
     { status: 200 },

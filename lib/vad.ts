@@ -14,9 +14,24 @@ export interface VadConfig {
 export const DEFAULT_VAD: VadConfig = {
   enterRms: 0.015,
   exitRms: 0.008,
-  silenceCutMs: 700,
+  // The cut is the first link in the reply chain: nothing can be transcribed,
+  // and therefore nothing can be answered, until a segment closes. 600ms sits
+  // below the shortest end-of-turn pause the listen policy will accept
+  // (PAUSE_END_FAST_MS, 700ms), so the last words are already on their way to
+  // the transcriber by the time the turn is handed back — while staying long
+  // enough that a between-words breath does not chop a sentence in half.
+  silenceCutMs: 600,
   maxSegmentMs: 10_000,
-  minSegmentMs: 300,
+  // A segment's length is measured between BLOCK timestamps (a 4096-sample
+  // block at 48 kHz is ~85ms, and startT is the end of the first loud block),
+  // so a real utterance always measures one block SHORT of its true length. At
+  // the old 300ms floor a spoken "Yes." or "No." (≈250–350ms, three or four
+  // loud blocks → 170–255ms measured) was filed as a noise blip and never
+  // transcribed: the candidate answered and the room heard nothing, nudged
+  // them, and eventually recorded "(no answer)". 150ms keeps any monosyllable
+  // that spans three blocks; a shorter click still never reaches the
+  // transcriber, and Whisper's hallucination filter catches what does.
+  minSegmentMs: 150,
 };
 
 export interface VadState {

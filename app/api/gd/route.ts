@@ -3,8 +3,14 @@ import { z } from "zod";
 import { computeGdTurns, GD_WRAP_AFTER } from "@/lib/gd/flow";
 import { GD_PERSONA_IDS, GD_ROSTER, personaName } from "@/lib/gd/roster";
 import { parseGdTurns } from "@/lib/gd/parse";
-import { cliAllowed, runClaude } from "@/lib/llm/cli-runner";
-import { groqComplete, groqEnabled } from "@/lib/llm/groq";
+import { llmSource, llmText, llmTextAvailable } from "@/lib/llm/complete";
+
+/** A debate batch must land while the room "takes a breath"; past this the
+ * scripted engine speaks instead. */
+const GD_TIMEOUT_MS = 12_000;
+
+/** Streaming/LLM routes must outlive the platform's default function timeout. */
+export const maxDuration = 60;
 
 // The GD debate endpoint. Stateless like /api/interview: the client sends the
 // attributed transcript, the brain returns the next batch of persona turns.
@@ -84,20 +90,20 @@ export async function POST(req: Request) {
   const personaTurns = data.history.filter((h) => h.personaId !== "candidate").length;
   const scripted = () => computeGdTurns(data.topic, data.candidateName, data.history, data.wantTurns);
 
-  const llmReady =
-    (groqEnabled() || (process.env.LLM_PROVIDER === "claude-cli" && cliAllowed())) &&
-    data.history.length > 0 &&
-    personaTurns < GD_WRAP_AFTER;
+  const llmReady = llmTextAvailable() && data.history.length > 0 && personaTurns < GD_WRAP_AFTER;
   if (llmReady) {
     try {
       // req.signal: a client abort/speculation cancel kills the request/subprocess.
-      const raw = groqEnabled()
-        ? await groqComplete(buildPrompt(data), { signal: req.signal, maxTokens: 600 })
-        : await runClaude(buildPrompt(data), 12_000, undefined, req.signal);
+      const raw = await llmText(buildPrompt(data), {
+        signal: req.signal,
+        maxTokens: 600,
+        timeoutMs: GD_TIMEOUT_MS,
+        temperature: 0.8,
+      });
       const turns = parseGdTurns(raw, data.wantTurns);
-      if (turns) return NextResponse.json({ turns, provider: groqEnabled() ? "groq" : "claude-cli" });
-    } catch {
-      // fall through to the scripted rescue
+      if (turns) return NextResponse.json({ turns, provider: llmSource() });
+    } catch (err) {
+      console.warn("[gd] model batch failed, using scripted engine:", err instanceof Error ? err.message : err);
     }
   }
   return NextResponse.json({ turns: scripted(), provider: "scripted" });

@@ -40,6 +40,16 @@ export class InvalidInputError extends Error {
   }
 }
 
+/** Thrown in production when no database is configured: a serverless or
+ * multi-instance host has no durable, shared filesystem for users.json, so
+ * accounts silently vanishing is worse than an honest 503. */
+export class StorageUnavailableError extends Error {
+  constructor() {
+    super("accounts need MONGODB_URI in production");
+    this.name = "StorageUnavailableError";
+  }
+}
+
 // Deliberately simple: one @, one dot in the domain, no whitespace. The route's
 // zod schema is the primary gate; this is a second wall on the store itself.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -113,15 +123,32 @@ function withFileLock<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/** The users file exists but cannot be read as a user list. Never treated as
+ * "empty" — an empty store would be written back over it and silently delete
+ * every account. Routes answer 503 instead. */
+export class StorageCorruptError extends Error {
+  constructor() {
+    super("users file is unreadable");
+    this.name = "StorageCorruptError";
+  }
+}
+
 async function readUsersFile(): Promise<User[]> {
+  let raw: string;
   try {
-    const raw = await fs.readFile(usersFilePath(), "utf8");
+    raw = await fs.readFile(usersFilePath(), "utf8");
+  } catch (err) {
+    // Missing file → empty store (first run of the local demo).
+    if ((err as { code?: string }).code === "ENOENT") return [];
+    throw new StorageCorruptError();
+  }
+  if (!raw.trim()) return [];
+  try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed)) throw new StorageCorruptError();
     return parsed.filter(isUserLike);
   } catch {
-    // Missing file / bad JSON → empty store (first run of the local demo).
-    return [];
+    throw new StorageCorruptError();
   }
 }
 
@@ -140,7 +167,11 @@ function isUserLike(value: unknown): value is User {
 async function writeUsersFile(users: User[]): Promise<void> {
   const file = usersFilePath();
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify(users, null, 2), "utf8");
+  // Write-then-rename: a crash mid-write leaves the old file intact instead
+  // of a half-written one that the next read would refuse.
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(users, null, 2), "utf8");
+  await fs.rename(tmp, file);
 }
 
 function fileBackend() {
@@ -168,6 +199,11 @@ async function backend() {
   if (dbEnabled()) {
     const mongo = await mongoBackend();
     if (mongo) return mongo;
+  }
+  // The local JSON file is a zero-setup DEMO store. PDS_ALLOW_FILE_USERS=1
+  // opts a single long-lived server into it deliberately.
+  if (process.env.NODE_ENV === "production" && process.env.PDS_ALLOW_FILE_USERS !== "1") {
+    throw new StorageUnavailableError();
   }
   return fileBackend();
 }

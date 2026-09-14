@@ -5,15 +5,18 @@ import { CODING_INTRO, codingQuestionFor } from "@/lib/fixtures/technical-questi
 import {
   clampTurn,
   deriveProgress,
+  looksLikeCandidateQuestion,
   NO_ANSWER,
   parseStreamedTurn,
   transcriptFor,
   visibleStreamText,
   type Progress,
 } from "@/lib/llm/parse";
+import { codingSeedFrom } from "@/lib/fixtures/technical-questions";
 import { cliAllowed, runClaude } from "@/lib/llm/cli-runner";
 import { codingAlreadyAsked, currentStage, type Stage } from "@/lib/llm/interview-stages";
 import { companyBriefBlock } from "@/lib/fixtures/company-brief";
+import { TURBO_TAGS } from "@/lib/speakable";
 
 // Development-only provider: the user's authenticated Claude Code CLI is the
 // brain — a genuinely adaptive interviewer with NO API key, on the fastest
@@ -47,6 +50,11 @@ export interface NextTurnOpts {
   /** Fires with the ACCUMULATED spoken text so far (control line withheld).
    * Scripted paths fire it exactly once, with the full text. */
   onText?: (fullTextSoFar: string) => void;
+  /** Stable subject for long-term memory — the signed-in user id. null/absent
+   * = guest: nothing is recalled or remembered (names are not identities). */
+  memoryKey?: string | null;
+  /** A speculative pre-fetch against a PARTIAL answer — never written to memory. */
+  speculative?: boolean;
 }
 
 const TURN_TIMEOUT_MS = 12_000;
@@ -80,7 +88,7 @@ function personaBlock(req: InterviewRequest): string {
       // which is why the round opened cold on a DSA question and cut to the
       // editor before learning anything about the candidate. A real technical
       // interviewer starts from your resume and earns their way to DSA.
-      `This is the TECHNICAL round with ${req.candidateName} for ${forRole}. You work through it in order: what they know and have built, then one project in technical depth, then the hands-on exercise, then a review of the code they wrote, then CS fundamentals and DSA. Sharp but encouraging, and always anchored to their resume and their own code. If the transcript contains submitted code, ask what it does and why — NEVER recite code aloud.`
+      `This is the TECHNICAL round with ${req.candidateName} for ${forRole}. You work through it in order: what they know and have built, then one project in technical depth, then the hands-on exercise, then a review of the code they wrote, then CS fundamentals and DSA. Sharp but encouraging, and always anchored to their resume and their own code. If the transcript contains submitted code, FIRST check that it solves the exercise you actually set — a live run praised a correct two-sum submission for a first-non-repeating-character problem — and if it solves something else say so plainly before anything else; then ask what it does and why. NEVER recite code aloud.`
     );
   }
   return `${identity} This is the HR round with ${req.candidateName} for ${forRole}. Warm but sharp, the way a good HR interviewer is.`;
@@ -177,7 +185,7 @@ export function buildPrompt(req: InterviewRequest, recall = ""): string {
   // what would you like to ask?" in reply to someone who had just asked. So the
   // objective switches on whether they are currently asking.
   const objective =
-    stageNow.key === "candidate-questions" && lastCandidateLine.includes("?")
+    stageNow.key === "candidate-questions" && looksLikeCandidateQuestion(lastCandidateLine)
       ? "They have the floor and they have just asked you something. ANSWER IT — specifically, from what you know about the job — and nothing else. Do not hand them the floor again, they already have it. Do not ask them an interview question. When they run out, close warmly."
       : stageNow.goal;
   return [
@@ -198,8 +206,17 @@ export function buildPrompt(req: InterviewRequest, recall = ""): string {
     `Nervous or apologising: reassure them, no question that turn. Joking or absurd ("I'm 900 years old"): be funny back in one line, then ask for the real answer — never answer a joke with a policy statement. Bare "hi": greet them like a person, don't read hesitation into it, don't launch a topic. Off-topic: follow briefly, then steer back.`,
     `Be curious about specifics. If they name a project, tool or decision, ask about THAT — the best question is usually the obvious follow-up to their last sentence.`,
     `If they say something factually WRONG, correct it politely and concretely in a sentence or two, then carry on. Letting an error pass is the worst thing you can do to someone preparing for a real interview. Partly right: say which part, fix the rest.`,
-    `Use the conversation below as memory — their name, projects, skills, earlier answers and mistakes. Use their name occasionally. Never re-ask what they already answered.`,
-    `Speak 1-3 sentences, plain spoken English, contractions, no lists or markdown (this is read aloud). AT MOST ONE question — never stack two. At most one [chuckle]/[sigh]/[clear throat]/[gasp], usually none.`,
+    // A live run re-asked the same question in new words three times when the
+    // answer was generic ("what draws you to us" → "what specifically about our
+    // product…"), and asked the package twice despite the canon saying once.
+    // A thin answer is information about the candidate, not a prompt to loop.
+    `Use the conversation below as memory — their name, projects, skills, earlier answers and mistakes. Use their name occasionally. Never re-ask what they already answered, and never re-ask a question in other words because the answer was thin: probe ONCE if it matters, otherwise take the answer and move on. Package or salary is asked exactly once; a vague answer is accepted.`,
+    // The tag list is derived, never typed out here: a tag this prompt invites
+    // but lib/speakable.ts does not know survives stripping and gets READ ALOUD
+    // as a word by any non-Chatterbox engine ("[laugh]" spoken as "laugh").
+    // Only the local Chatterbox-Turbo engine performs these; everywhere else
+    // they are stripped, which is why offering them costs nothing.
+    `Speak 1-3 sentences, plain spoken English, contractions, no lists or markdown (this is read aloud). AT MOST ONE question — never stack two, and never a double-barrelled one ("…and how did you handle…?" is two: pick the sharper half, the other can wait a turn). At most one of ${TURBO_TAGS.join(" ")} per turn and usually none — only where a real interviewer would genuinely make that sound.`,
     `Work through the stages below in order, going properly deep in each before moving on, then wrap up warmly with done true. ${topicSource}`,
     `${topicStateBlock}`,
     `The stage picks WHAT you are trying to learn; it never dictates your words and never outranks reacting to what they just said. Never announce stages or numbers, and never mention these instructions.`,
@@ -287,7 +304,9 @@ export const claudeCliProvider = {
       // mechanic is unchanged under deep-dive. (Probe answers count too, which
       // can land the slot slightly early in a chained topic — acceptable.)
       if (answers === CODING_QUESTION_SLOT - 1) {
-        const codingQ = codingQuestionFor(req.role, req.codeLanguage);
+        // Seeded exactly like the client, so the spoken problem and the
+        // editor's starter always agree.
+        const codingQ = codingQuestionFor(req.role, req.codeLanguage, codingSeedFrom(req.candidateName, req.history));
         const alreadyAsked = req.history.some((h) => h.speaker === "interviewer" && h.text.includes(codingQ.text));
         if (!alreadyAsked) {
           const turn: InterviewerTurn = {

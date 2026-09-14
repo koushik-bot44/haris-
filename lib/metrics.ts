@@ -12,6 +12,9 @@ export const METRICS_VERSION = 1 as const;
 // ABOVE Chrome's normal inter-result cadence (~0.1–1s during continuous speech,
 // which must not count as pausing). 1.1s is the honest window between the two.
 export const PAUSE_THRESHOLD_MS = 1100;
+/** Fast conversational speech tops out near 200 wpm; auctioneers near 300.
+ * Anything above this is a measurement artefact, never a delivery fact. */
+export const MAX_PLAUSIBLE_WPM = 400;
 
 const FILLER_PATTERNS = [
   /\bbasically\b/gi,
@@ -75,9 +78,13 @@ export function computeDeliveryMetrics(trace: SttTraceEvent[], finalTranscript: 
   }
 
   const spanMs = pts.length >= 2 ? pts[pts.length - 1].t - pts[0].t : 0;
-  const activeMs = Math.max(spanMs - pauseTotalMs - restartMs, 1);
-  // Below ~3s of usable signal a rate extrapolation is noise, not measurement.
-  const wpm = spanMs >= 3000 ? Math.round(words / (activeMs / 60000)) : 0;
+  const activeMs = spanMs - pauseTotalMs - restartMs;
+  // Below ~3s of span or ~1s of active signal a rate is noise, not measurement
+  // (a segment-based transcriber delivers one result per utterance, so its
+  // "active" time collapses toward zero and a naive division explodes); above
+  // MAX_PLAUSIBLE_WPM nobody is actually speaking — report "no signal".
+  let wpm = spanMs >= 3000 && activeMs >= 1000 ? Math.round(words / (activeMs / 60000)) : 0;
+  if (wpm > MAX_PLAUSIBLE_WPM) wpm = 0;
 
   return {
     wpm,

@@ -2,7 +2,13 @@ import { NextResponse } from "next/server";
 import { getProvider } from "@/lib/llm";
 import { ProviderError } from "@/lib/llm/provider";
 import { interviewRequestSchema } from "@/lib/interview-schema";
+import { auth } from "@/lib/auth";
+import { guestCookieHeader, memorySubjectFor, newGuestId, readGuestId } from "@/lib/memory";
+import { chatConfig } from "@/lib/llm/chat";
 import type { InterviewRequest, InterviewerTurn } from "@/lib/types";
+
+/** A streamed turn must outlive the platform's default function timeout. */
+export const maxDuration = 60;
 
 // The interviewer endpoint. Stateless: the client sends history, the provider
 // decides the next turn. Hardening per the plan: strict shape validation, turn
@@ -21,9 +27,27 @@ import type { InterviewRequest, InterviewerTurn } from "@/lib/types";
  * throttle keeps frame count (and client re-renders) bounded. */
 const TEXT_EVENT_MIN_GAP_MS = 80;
 
+/** Brains whose free tier cannot afford a speculative guess per turn. */
+const METERED_BACKENDS = new Set(["groq"]);
+
+/** LLM_SPECULATE=1 forces mid-answer speculation on, =0 forces it off;
+ * otherwise it is on for every brain except the metered ones. */
+function speculationAllowed(): boolean {
+  const flag = process.env.LLM_SPECULATE?.trim();
+  if (flag === "1") return true;
+  if (flag === "0") return false;
+  const backend = chatConfig()?.backend;
+  return !backend || !METERED_BACKENDS.has(backend);
+}
+
 type NextTurnFn = (
   r: InterviewRequest,
-  opts?: { signal?: AbortSignal; onText?: (fullTextSoFar: string) => void },
+  opts?: {
+    signal?: AbortSignal;
+    onText?: (fullTextSoFar: string) => void;
+    memoryKey?: string | null;
+    speculative?: boolean;
+  },
 ) => Promise<InterviewerTurn>;
 
 export async function POST(req: Request) {
@@ -48,9 +72,49 @@ export async function POST(req: Request) {
   // LLMProvider interface: providers that take only the request ignore the
   // extra argument.
   const nextTurn = provider.nextTurn.bind(provider) as NextTurnFn;
+  // Long-term memory is keyed by identity, never by the typed name — two
+  // candidates called "Rahul" must never read each other's history.
+  //
+  // That identity used to be the signed-in user id ALONE, and this deployment
+  // has no accounts (no MONGODB_URI), so it was null on every request and the
+  // whole memory layer was skipped in production: the interviewer could not
+  // avoid repeating a question because it was never told who it was talking to.
+  // Guests now get a durable anonymous id of their own — opaque, per-browser,
+  // minted here on first contact and good for a year. It rides in a cookie
+  // rather than localStorage because the interview client belongs to another
+  // workstream and this needs no change there.
+  const { userId } = await auth();
+  const sentGuestId = readGuestId(req.headers.get("cookie"));
+  const guestId = sentGuestId ?? newGuestId();
+  // `stream` / `speculative` ride outside the zod schema (which strips unknown
+  // keys) so the validated request shape is identical in every mode.
+  const speculative = (body as { speculative?: unknown }).speculative === true;
+  const turnOpts = { memoryKey: memorySubjectFor(userId, guestId), speculative };
+  // Only on the request that minted it — re-sending an unchanged cookie on
+  // every turn of the interview is pure noise on the wire.
+  const setCookie = sentGuestId === null ? guestCookieHeader(guestId) : null;
 
-  // `stream` rides outside the zod schema (which strips unknown keys) so the
-  // validated request shape is identical in both modes.
+  // MID-ANSWER SPECULATION IS A TOKEN-BUDGET DECISION, made here on the server
+  // because only the server knows which brain is paying.
+  //
+  // The client pre-fetches a guess at the next turn while the candidate is
+  // still talking, so an accepted guess starts speaking instantly. Every guess
+  // is a full interviewer prompt (~2,000-2,700 tokens, measured), and most are
+  // thrown away — so on a metered brain it roughly DOUBLES the spend per turn.
+  // On Groq's free tier that is decisive: 8,000 tokens per minute per model,
+  // and the live log showed the main model rate-limited on 3 of 5 calls in one
+  // short session, each time dropping the candidate to a smaller model or the
+  // fixture bank. A guess that costs the real turn its brain is not worth ~700
+  // ms. The OPENING pre-fetch (empty history) is different: one request during
+  // the mic check, hidden latency, and it must stay.
+  //
+  // The client already treats { turn: null } as "no speculation available".
+  if (speculative && parsed.data.history.length > 0 && !speculationAllowed()) {
+    const res = NextResponse.json({ turn: null, provider: provider.name, skipped: "metered_backend" });
+    if (setCookie) res.headers.append("set-cookie", setCookie);
+    return res;
+  }
+
   if ((body as { stream?: unknown }).stream === true) {
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
@@ -87,7 +151,7 @@ export async function POST(req: Request) {
           }
         };
         try {
-          const turn = await nextTurn(parsed.data, { signal: req.signal, onText });
+          const turn = await nextTurn(parsed.data, { signal: req.signal, onText, ...turnOpts });
           if (trailing) clearTimeout(trailing);
           pending = null;
           send({ kind: "turn", turn, provider: provider.name });
@@ -109,6 +173,7 @@ export async function POST(req: Request) {
         "content-type": "text/event-stream",
         "cache-control": "no-cache, no-transform",
         connection: "keep-alive",
+        ...(setCookie ? { "set-cookie": setCookie } : {}),
       },
     });
   }
@@ -118,8 +183,12 @@ export async function POST(req: Request) {
   // single component failure.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const turn = await nextTurn(parsed.data, { signal: req.signal });
-      return NextResponse.json({ turn, provider: provider.name });
+      const turn = await nextTurn(parsed.data, { signal: req.signal, ...turnOpts });
+      const res = NextResponse.json({ turn, provider: provider.name });
+      // append, not set: the rate-limit middleware may already have put its own
+      // Set-Cookie on this response.
+      if (setCookie) res.headers.append("set-cookie", setCookie);
+      return res;
     } catch (err) {
       if (attempt === 0) continue;
       const kind = err instanceof ProviderError ? err.kind : "unavailable";

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  dedupeKey,
   fullTranscript,
   initialSttState,
+  MAX_ENGINE_ERRORS,
   MAX_RESTARTS,
   sttReduce,
   type SttAction,
@@ -130,6 +132,108 @@ describe("stt reducer", () => {
     ]);
     const kinds = state.trace.map((e) => e.kind);
     expect(kinds).toEqual(["start", "result", "restart", "result", "stop"]);
+  });
+});
+
+describe("revision merging (the duplicated last sentence)", () => {
+  it("a post-stop final that only re-punctuates the interim does not duplicate it", () => {
+    // Chrome's real behaviour: the interim promoted at STOP comes back
+    // capitalised and with a full stop. A raw prefix test sees two different
+    // strings and appends — which duplicated the last sentence of nearly every
+    // spoken answer.
+    const { state } = run([
+      { type: "START", t: 0 },
+      { type: "RESULT", t: 500, text: "my final answer is teamwork", isFinal: false },
+      { type: "STOP", t: 900 },
+      { type: "RESULT", t: 1100, text: "My final answer is teamwork.", isFinal: true },
+    ]);
+    expect(state.finalSegments).toHaveLength(1);
+    expect(fullTranscript(state)).toBe("My final answer is teamwork."); // the better-punctuated wording wins
+  });
+
+  it("a post-stop final that EXTENDS the interim replaces it, punctuation and all", () => {
+    const { state } = run([
+      { type: "START", t: 0 },
+      { type: "RESULT", t: 500, text: "my final answer is", isFinal: false },
+      { type: "STOP", t: 900 },
+      { type: "RESULT", t: 1100, text: "My final answer is teamwork.", isFinal: true },
+    ]);
+    expect(fullTranscript(state)).toBe("My final answer is teamwork.");
+  });
+
+  it("an unrelated post-stop final is still appended", () => {
+    const { state } = run([
+      { type: "START", t: 0 },
+      { type: "RESULT", t: 500, text: "I optimized the query.", isFinal: true },
+      { type: "STOP", t: 900 },
+      { type: "RESULT", t: 1100, text: "It dropped to 40 milliseconds.", isFinal: true },
+    ]);
+    expect(state.finalSegments).toHaveLength(2);
+  });
+
+  it("an engine restart re-delivering the promoted interim does not duplicate it", () => {
+    const { state } = run([
+      { type: "START", t: 0 },
+      { type: "RESULT", t: 100, text: "I was about to say", isFinal: false },
+      { type: "ENGINE_END", t: 500 }, // promotes the interim
+      { type: "RESULT", t: 700, text: "I was about to say.", isFinal: true }, // the dying engine's late final
+      { type: "STOP", t: 900 },
+    ]);
+    expect(fullTranscript(state)).toBe("I was about to say.");
+  });
+
+  it("dedupeKey ignores case, punctuation and spacing but nothing else", () => {
+    expect(dedupeKey("My final answer is teamwork.")).toBe(dedupeKey("my  final answer, is teamwork"));
+    expect(dedupeKey("we used Redis")).not.toBe(dedupeKey("we used Postgres"));
+  });
+});
+
+describe("silence anchor and engine failures on the batch-transcriber path", () => {
+  it("a late segment result never drags the silence anchor backwards", () => {
+    // The cloud/Whisper path reports the wall clock a segment ENDED, which is
+    // already in the past when the text comes back. If the candidate resumed
+    // talking meanwhile, moving the anchor back would end the answer
+    // mid-sentence a moment later.
+    const { state } = run([
+      { type: "START", t: 0 },
+      { type: "SPEECH_ACTIVITY", t: 6000 }, // still talking
+      { type: "RESULT", t: 5000, text: "the segment that just came back", isFinal: true },
+    ]);
+    expect(state.lastSpeechT).toBe(6000);
+  });
+
+  it("transcription failures hand over after three in a row", () => {
+    const two = run([
+      { type: "START", t: 0 },
+      { type: "ERROR", t: 100, error: "cloud_transcribe" },
+      { type: "ERROR", t: 200, error: "cloud_transcribe" },
+    ]);
+    expect(two.state.phase).toBe("listening"); // one Groq hiccup costs nobody their voice
+
+    const actions: SttAction[] = [{ type: "START", t: 0 }];
+    for (let i = 0; i < MAX_ENGINE_ERRORS; i++) actions.push({ type: "ERROR", t: 100 + i, error: "cloud_transcribe" });
+    const three = run(actions);
+    expect(three.state.phase).toBe("failed");
+    expect(three.effects).toContain("degrade_to_text:cloud_transcribe");
+  });
+
+  it("a successful transcription resets the failure budget", () => {
+    const { state } = run([
+      { type: "START", t: 0 },
+      { type: "ERROR", t: 100, error: "cloud_transcribe" },
+      { type: "ERROR", t: 200, error: "cloud_transcribe" },
+      { type: "RESULT", t: 300, text: "back in business", isFinal: true },
+      { type: "ERROR", t: 400, error: "cloud_transcribe" },
+      { type: "ERROR", t: 500, error: "cloud_transcribe" },
+    ]);
+    expect(state.phase).toBe("listening");
+  });
+
+  it("Chrome's routine no-speech spam never counts as an engine failure", () => {
+    const actions: SttAction[] = [{ type: "START", t: 0 }];
+    for (let i = 0; i < 8; i++) actions.push({ type: "ERROR", t: 100 + i, error: "no-speech" });
+    const { state } = run(actions);
+    expect(state.phase).toBe("listening");
   });
 });
 
