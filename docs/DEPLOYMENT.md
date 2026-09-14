@@ -297,6 +297,14 @@ Set `CHATTERBOX_URL` if you run it on another host or port. Note that `chatterbo
 `app/api/tts/route.ts` deliberately refuses to probe localhost when `NODE_ENV === "production"` — a
 deployed server has no local voice server, and probing one on every request would just add latency.
 
+**On the deployed site** the studio voice still reaches a browser whose *own machine* runs the server:
+when `GET /api/tts` reports `chatterbox:false`, the page probes `http://127.0.0.1:8004/v1/audio/voices`
+itself (`lib/tts.ts`, `probeLocalChatterbox`) and, if a Chatterbox server answers, sends every chatterbox
+request there directly with the same body the route would send (`lib/chatterbox-request.ts`). Chrome
+asks once for permission to reach the local network from a public site; deny it and the room simply
+uses the on-device voice. Nothing about this is configured on Vercel — `CHATTERBOX_VOICE` there only
+tells the browser which interviewer voice file to ask for.
+
 ## Release checklist
 
 1. `npm run check` (typecheck + tests + build) passes locally.

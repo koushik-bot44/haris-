@@ -219,6 +219,7 @@ describe("GET /api/tts — the capability report the client picks an engine from
       engines: [],
       chatterbox: false,
       voices: [],
+      chatterboxVoice: null,
       enabled: false,
       elevenlabs: false,
     });

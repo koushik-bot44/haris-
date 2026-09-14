@@ -1,7 +1,16 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { WAV_VOICE_RE } from "@/lib/voices";
-import { chatterboxVoiceFor, isVoiceKey, voiceKeyOf, CLOUD_TTS_ENGINES } from "@/lib/voice-cast";
+import { isVoiceKey, voiceKeyOf, CLOUD_TTS_ENGINES } from "@/lib/voice-cast";
+import {
+  CHATTERBOX_DEFAULT_CHUNK,
+  CHATTERBOX_DEFAULT_TUNING,
+  CHATTERBOX_SEED_BASE,
+  chatterboxRequestBody,
+  chatterboxSeed,
+  chatterboxVoiceFile,
+  type ChatterboxTuning,
+} from "@/lib/chatterbox-request";
 import { cloudSpeak, cloudTtsEngines, defaultCloudTtsEngine, TtsEngineError } from "@/lib/tts-engines";
 import { pcmToWav } from "@/lib/pcm-wav";
 import { parseWavHeader } from "@/lib/wav";
@@ -97,6 +106,9 @@ export async function GET() {
       engines,
       chatterbox,
       voices,
+      /** The interviewer-voice override this server applies, so a browser that
+       * reaches a Chatterbox server of its own renders the same speaker. */
+      chatterboxVoice: process.env.CHATTERBOX_VOICE?.trim() || null,
       // legacy fields (older clients)
       enabled: engines.includes("elevenlabs"),
       elevenlabs: engines.includes("elevenlabs"),
@@ -126,36 +138,18 @@ function envNum(name: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-/** A STABLE, non-zero seed per persona.
- *
- * Chatterbox treats seed 0 as "pick a random one", so every request re-rolls
- * the sampling and successive utterances of the same voice file differ in pace,
- * energy and warmth. Across the two draws of a turn that is audible as the
- * interviewer's character shifting mid-answer. Deriving a fixed seed from the
- * persona key makes each speaker deterministic — same voice file AND same
- * sampling every time — while keeping the six personas distinct from each
- * other. CHATTERBOX_SEED overrides the base if a particular value sounds
- * better; 0 restores the server's random behaviour. */
-function chatterboxSeed(key: string): number {
-  const base = envNum("CHATTERBOX_SEED", 8_675_309);
-  if (base === 0) return 0;
-  let h = 0;
-  for (let i = 0; i < key.length; i++) h = (Math.imul(h, 31) + key.charCodeAt(i)) >>> 0;
-  return (base + (h % 100_000)) >>> 0;
-}
-
-/** Generation knobs shared by both Chatterbox endpoints. Turbo ignores
- * exaggeration/cfg_weight; the original 0.5B model uses them. */
-function chatterboxTuning(key: string) {
+/** Generation knobs for the Chatterbox request — the shared shape in
+ * lib/chatterbox-request.ts (also what the browser sends when it talks to the
+ * candidate's own server directly), with this server's env overrides.
+ * CHATTERBOX_SEED replaces the seed base (0 restores the server's random
+ * behaviour); the rest replace the documented defaults. */
+function chatterboxTuning(key: string): ChatterboxTuning {
   return {
-    seed: chatterboxSeed(key),
-    // Lower than the server's default: this is an interviewer reading a
-    // question, not an audiobook performance. Less sampling variance means a
-    // steadier voice between the two draws of a turn, and it renders faster.
-    temperature: envNum("CHATTERBOX_TEMPERATURE", 0.7),
-    exaggeration: envNum("CHATTERBOX_EXAGGERATION", 0.5),
-    cfg_weight: envNum("CHATTERBOX_CFG_WEIGHT", 0.5),
-    speed_factor: envNum("CHATTERBOX_SPEED", 1.0),
+    seed: chatterboxSeed(key, envNum("CHATTERBOX_SEED", CHATTERBOX_SEED_BASE)),
+    temperature: envNum("CHATTERBOX_TEMPERATURE", CHATTERBOX_DEFAULT_TUNING.temperature),
+    exaggeration: envNum("CHATTERBOX_EXAGGERATION", CHATTERBOX_DEFAULT_TUNING.exaggeration),
+    cfg_weight: envNum("CHATTERBOX_CFG_WEIGHT", CHATTERBOX_DEFAULT_TUNING.cfg_weight),
+    speed_factor: envNum("CHATTERBOX_SPEED", CHATTERBOX_DEFAULT_TUNING.speed_factor),
   };
 }
 
@@ -170,67 +164,28 @@ async function speakChatterbox(text: string, voice: string | undefined, stream: 
   // chatterboxVoiceFor always returns a filename, so the env var was documented
   // configuration that could never take effect: pointing it at a cloned voice
   // silently kept Emily.wav.
-  const override = process.env.CHATTERBOX_VOICE?.trim();
-  const voiceFile =
-    voice && !isVoiceKey(voice)
-      ? voice
-      : override && (key === "hr" || key === "technical")
-        ? override
-        : chatterboxVoiceFor(key);
+  const voiceFile = chatterboxVoiceFile(voice, process.env.CHATTERBOX_VOICE);
   const timeout = AbortSignal.any([signal, AbortSignal.timeout(stream ? 20_000 : 30_000)]);
-  const tuning = chatterboxTuning(key);
-  if (stream) {
-    // Native /tts: streaming requires predefined voice mode; the response is a
-    // chunked WAV (0xFFFFFFFF sizes) flushed as each text chunk finishes.
-    const res = await fetch(`${base}/tts`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        text,
-        voice_mode: "predefined",
-        predefined_voice_id: voiceFile,
-        stream: true,
-        split_text: true,
-        // Chatterbox renders a whole chunk in ONE forward pass — there is no
-        // token-by-token streaming inside a chunk — so this value IS the
-        // time-to-first-audio. 50 is the documented minimum. The server
-        // crossfades 20ms between chunks, so small chunks cost nothing audible.
-        chunk_size: Math.max(50, Math.min(500, envNum("CHATTERBOX_CHUNK_SIZE", 50))),
-        ...tuning,
-      }),
-      signal: timeout,
-    });
-    if (!res.ok || !res.body) return NextResponse.json({ error: "chatterbox_error", status: res.status }, { status: 502 });
-    return new NextResponse(res.body, { headers: AUDIO_HEADERS("chatterbox") });
-  }
-  // The SAME native endpoint, non-streamed: it answers a finite WAV. This used
-  // to go through the OpenAI-compatible /v1/audio/speech, which accepts only
-  // `speed` and `seed` (verified against the server source) and fills
-  // temperature / exaggeration / cfg_weight from the server's own config
-  // defaults. Draw 2 of every turn is prepared through this path, so the
-  // opening sentence was sampled at temperature 0.7 and the remainder at the
-  // server's 0.8 — two different renderings of one speaker inside one turn.
-  // Both draws now carry identical knobs.
+  // Native /tts for both draws. Streamed, it answers a chunked WAV (0xFFFFFFFF
+  // sizes) flushed as each text chunk finishes; non-streamed, the SAME endpoint
+  // answers a finite WAV. (The OpenAI-compatible /v1/audio/speech used to carry
+  // draw 2: it accepts only `speed` and `seed` and fills the other knobs from
+  // the server's own config, so the opening sentence was sampled at 0.7 and the
+  // remainder at 0.8 — two renderings of one speaker inside one turn.) Chunk
+  // size IS the time-to-first-audio: Chatterbox renders a whole chunk in one
+  // forward pass, 50 is the documented minimum, and the 20 ms crossfade makes
+  // small chunks free.
   const res = await fetch(`${base}/tts`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      text,
-      voice_mode: "predefined",
-      predefined_voice_id: voiceFile,
-      output_format: "wav",
-      stream: false,
-      split_text: true,
-      chunk_size: Math.max(50, Math.min(500, envNum("CHATTERBOX_CHUNK_SIZE", 50))),
-      ...tuning,
-    }),
+    body: JSON.stringify(chatterboxRequestBody(text, voiceFile, stream, chatterboxTuning(key), envNum("CHATTERBOX_CHUNK_SIZE", CHATTERBOX_DEFAULT_CHUNK))),
     signal: timeout,
   });
-  // `!res.body` matters as much as `!res.ok`, exactly as on the streaming path
-  // above: a 200 with an empty body would otherwise be forwarded as a 0-byte
-  // audio/wav, and this is the path callers use to pre-fetch and decode a whole
-  // utterance — decodeAudioData throws on it instead of taking the clean 502
-  // and letting the fallback voice speak.
+  // `!res.body` matters as much as `!res.ok`: a 200 with an empty body would
+  // otherwise be forwarded as a 0-byte audio/wav, and the buffered path is what
+  // callers use to pre-fetch and decode a whole utterance — decodeAudioData
+  // throws on it instead of taking the clean 502 and letting the fallback voice
+  // speak.
   if (!res.ok || !res.body) return NextResponse.json({ error: "chatterbox_error", status: res.status }, { status: 502 });
   return new NextResponse(res.body, { headers: AUDIO_HEADERS("chatterbox") });
 }

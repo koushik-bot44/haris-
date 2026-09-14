@@ -21,6 +21,14 @@ import { splitForSpeech } from "@/lib/sentence-split";
 import { castVoice, isVoiceKey, voiceKeyOf } from "@/lib/voice-cast";
 import { stripSpeechTags } from "@/lib/speakable";
 import { WAV_VOICE_RE } from "@/lib/voices";
+import {
+  CHATTERBOX_DEFAULT_TUNING,
+  CHATTERBOX_DEFAULT_URL,
+  chatterboxRequestBody,
+  chatterboxSeed,
+  chatterboxVoiceFile,
+  chatterboxVoicesOf,
+} from "@/lib/chatterbox-request";
 
 const ENGINE_KEY = "pds_voice_engine";
 /** An EXPLICIT user pick, kept apart from the auto-resolved cache above. */
@@ -119,9 +127,62 @@ export interface VoiceCapabilities {
   cloud: string | null;
   engines: string[];
   chatterbox: boolean;
+  /** The server's CHATTERBOX_VOICE override for the interviewer personas, if any. */
+  chatterboxVoice?: string | null;
 }
 
 let capsCache: VoiceCapabilities | null = null;
+
+/** The candidate's OWN machine may run the studio voice server even when the
+ * page comes from Vercel — a demo on the laptop that has Chatterbox installed.
+ * The deployed server can never reach that server, so the browser asks it
+ * directly: loopback is a trustworthy origin to Chrome even from an https page
+ * (Chrome asks once for local-network access), and Chatterbox-TTS-Server
+ * answers CORS for any origin. Set only when the deployed server reported no
+ * studio voice of its own AND the loopback probe answered like a Chatterbox
+ * server; every chatterbox request then goes there instead of /api/tts. */
+let chatterboxDirect: string | null = null;
+let chatterboxVoiceOverride: string | null = null;
+
+/** Where chatterbox requests go when they bypass /api/tts, or null. */
+export function chatterboxDirectUrl(): string | null {
+  return chatterboxDirect;
+}
+
+/** A page served from this same machine already learned the answer from its
+ * own server's probe — asking again would only double the request. */
+function pageOnLoopback(): boolean {
+  const h = typeof window !== "undefined" ? (window.location?.hostname ?? "") : "";
+  return h === "" || h === "localhost" || h === "127.0.0.1" || h === "[::1]";
+}
+
+async function probeLocalChatterbox(): Promise<boolean> {
+  if (pageOnLoopback()) return false;
+  try {
+    const res = await fetch(`${CHATTERBOX_DEFAULT_URL}/v1/audio/voices`, { signal: AbortSignal.timeout(1500), cache: "no-store" });
+    if (!res.ok) return false;
+    return chatterboxVoicesOf(await res.json()) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** The synthesis request for a server engine: /api/tts, or the candidate's
+ * own Chatterbox server when that is where the studio voice lives — with the
+ * SAME body the route would send, so one speaker renders alike on both paths. */
+function ttsFetch(engine: "cloud" | "chatterbox", text: string, voice: string | undefined, stream: boolean, signal: AbortSignal): Promise<Response> {
+  if (engine === "chatterbox" && chatterboxDirect) {
+    const key = voiceKeyOf(voice);
+    const body = chatterboxRequestBody(text, chatterboxVoiceFile(voice, chatterboxVoiceOverride), stream, { seed: chatterboxSeed(key), ...CHATTERBOX_DEFAULT_TUNING });
+    return fetch(`${chatterboxDirect}/tts`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal });
+  }
+  return fetch("/api/tts", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text, engine, ...(voice ? { voice } : {}), stream }),
+    signal,
+  });
+}
 /** Set when the server said "no cloud voice" — skip the doomed round trip on
  * every later utterance this visit. Cleared by a successful resolve. */
 let cloudUnavailable = false;
@@ -179,6 +240,12 @@ export async function resolveVoiceEngine(): Promise<VoiceEngine> {
     if (!res.ok) throw new Error(`tts_${res.status}`);
     const d = (await res.json()) as Partial<VoiceCapabilities>;
     capsCache = { cloud: d.cloud ?? null, engines: d.engines ?? [], chatterbox: Boolean(d.chatterbox) };
+    chatterboxVoiceOverride = typeof d.chatterboxVoice === "string" && d.chatterboxVoice.trim() ? d.chatterboxVoice.trim() : null;
+    chatterboxDirect = null;
+    if (!capsCache.chatterbox && (await probeLocalChatterbox())) {
+      chatterboxDirect = CHATTERBOX_DEFAULT_URL;
+      capsCache = { ...capsCache, chatterbox: true };
+    }
     cloudUnavailable = !capsCache.cloud;
     sessionDegraded = false; // a fresh probe clears last session's degrade latch
 
@@ -429,13 +496,7 @@ function serverSpeak(text: string, engine: "cloud" | "chatterbox", opts?: SpeakO
     resolveEngine(e);
   };
 
-  const postTts = (stream: boolean) =>
-    fetch("/api/tts", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text, engine, ...(voice ? { voice } : {}), stream }),
-      signal: abort.signal,
-    });
+  const postTts = (stream: boolean) => ttsFetch(engine, text, voice, stream, abort.signal);
 
   const playBuffered = async (res: Response) => {
     const buf = await res.arrayBuffer();
@@ -723,12 +784,7 @@ export function prepareSpeak(text: string, opts?: SpeakOptions): PreparedSpeech 
   const ready: Promise<void> =
     serverEngine && !(serverEngine === "cloud" && cloudUnavailable)
       ? (async () => {
-          const res = await fetch("/api/tts", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ text, engine: serverEngine, ...(voice ? { voice } : {}), stream: false }),
-            signal: abort.signal,
-          });
+          const res = await ttsFetch(serverEngine, text, voice, false, abort.signal);
           if (!res.ok) {
             if (res.status === 404 && serverEngine === "cloud") cloudUnavailable = true;
             throw new Error(`tts_${res.status}`);

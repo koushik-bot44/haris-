@@ -18,7 +18,7 @@ vi.mock("@/lib/tts-kokoro", () => ({
   PRIYA_VOICE: "af_heart",
 }));
 
-import { resolveVoiceEngine, setVoiceEnginePreference } from "@/lib/tts";
+import { chatterboxDirectUrl, resolveVoiceEngine, setVoiceEnginePreference } from "@/lib/tts";
 
 /** Minimal localStorage — the real one does not exist under node. */
 function makeStorage() {
@@ -113,5 +113,59 @@ describe("resolveVoiceEngine — one engine per session", () => {
       }),
     );
     await expect(resolveVoiceEngine()).resolves.toBeTypeOf("string");
+  });
+});
+
+describe("the candidate's own studio voice server, from a deployed page", () => {
+  // The app on Vercel can never reach a Chatterbox server — it lives on the
+  // candidate's laptop. The BROWSER can: loopback is a trustworthy origin even
+  // from an https page, and that server answers CORS for any origin. So when
+  // the deployed server reports no studio voice, the page asks the machine it
+  // is running on before settling for the on-device voice.
+  function stubDeployedPage(local: "up" | "down" | "not-chatterbox", hostname = "placement-day-simulator.vercel.app") {
+    vi.stubGlobal("window", { localStorage: storage, location: { hostname, protocol: "https:" } });
+    const fetch = vi.fn(async (url: string) => {
+      if (String(url).startsWith("http://127.0.0.1:8004/")) {
+        if (local === "down") throw new TypeError("Failed to fetch");
+        return { ok: true, json: async () => (local === "up" ? { voices: ["Emily.wav", "Michael.wav"] } : { hello: "world" }) };
+      }
+      return { ok: true, json: async () => ({ cloud: "groq", engines: ["groq"], chatterbox: false }) };
+    });
+    vi.stubGlobal("fetch", fetch);
+    return fetch;
+  }
+
+  it("uses the local server when the deployed server has none but the browser's machine does", async () => {
+    stubDeployedPage("up");
+    await expect(resolveVoiceEngine()).resolves.toBe("chatterbox");
+    expect(chatterboxDirectUrl()).toBe("http://127.0.0.1:8004");
+  });
+
+  it("stays on the on-device voice when nothing answers on the loopback port", async () => {
+    stubDeployedPage("down");
+    await expect(resolveVoiceEngine()).resolves.toBe("kokoro");
+    expect(chatterboxDirectUrl()).toBeNull();
+  });
+
+  it("is not fooled by some other service on that port", async () => {
+    stubDeployedPage("not-chatterbox");
+    await expect(resolveVoiceEngine()).resolves.toBe("kokoro");
+    expect(chatterboxDirectUrl()).toBeNull();
+  });
+
+  it("does not probe twice for a page served from that same machine — its own server already answered", async () => {
+    const fetch = stubDeployedPage("up", "localhost");
+    await expect(resolveVoiceEngine()).resolves.toBe("kokoro");
+    expect(fetch.mock.calls.map((c) => String(c[0]))).toEqual(["/api/tts"]);
+    expect(chatterboxDirectUrl()).toBeNull();
+  });
+
+  it("the deployed server's own studio voice still wins, with no direct probe", async () => {
+    vi.stubGlobal("window", { localStorage: storage, location: { hostname: "placement-day-simulator.vercel.app", protocol: "https:" } });
+    const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ cloud: "groq", engines: ["groq"], chatterbox: true }) }));
+    vi.stubGlobal("fetch", fetch);
+    await expect(resolveVoiceEngine()).resolves.toBe("chatterbox");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(chatterboxDirectUrl()).toBeNull();
   });
 });
