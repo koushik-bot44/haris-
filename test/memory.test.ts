@@ -5,7 +5,7 @@ import {
   containerTagFor,
   extractQuestion,
   guestCookieHeader,
-  legacyContainerTagFor,
+  previousContainerTagFor,
   memorySubjectFor,
   newGuestId,
   peekAskedQuestions,
@@ -108,24 +108,35 @@ describe("guest identity (why memory never ran in production)", () => {
   });
 });
 
-describe("container tags (the scheme change that orphaned the data)", () => {
-  it("keeps pds_user_* as the one scheme that is written", () => {
-    expect(containerTagFor("Petter")).toBe("pds_user_petter");
-    expect(containerTagFor("")).toBe("pds_user_anon");
+describe("container tags — keyed by identity, never by name", () => {
+  it("writes under a hashed identity tag that reveals nothing about the subject", () => {
+    const tag = containerTagFor("google:900123");
+    expect(tag).toMatch(/^pds_u_[a-f0-9]{32}$/);
+    expect(tag).not.toContain("900123");
+    expect(containerTagFor("google:900123")).toBe(tag);
   });
 
-  it("still reaches the legacy pds_candidate_* tag, which is keyed on the NAME", () => {
-    // The live account holds a document under exactly this tag.
-    expect(legacyContainerTagFor("petter")).toBe("pds_candidate_petter");
-    expect(legacyContainerTagFor(undefined)).toBeNull();
+  it("keeps ids apart that a slug used to collapse together", () => {
+    expect(containerTagFor("guest-AbCdEfGh")).not.toBe(containerTagFor("guest-abcdefgh"));
+    expect(containerTagFor("user.1")).not.toBe(containerTagFor("user_1"));
   });
 
-  it("recall searches the current AND legacy tags in one round trip (containerTags is an OR)", async () => {
-    const spy = stubFetch(() => searchResponse(["old fact from the legacy tag"]));
+  it("regression: two signed-in candidates both called Rahul never share memory", async () => {
+    const spy = stubFetch(() => searchResponse([]));
+    await recallCandidate("507f1f77bcf86cd799439011", "background", { candidateName: "Rahul" });
+    await recallCandidate("507f191e810c19729de860ea", "background", { candidateName: "Rahul" });
+    const [a, b] = calls(spy).searches.map((s) => s.containerTags as string[]);
+    expect(a.some((t) => b.includes(t))).toBe(false);
+    for (const t of [...a, ...b]) expect(t).not.toMatch(/rahul|pds_candidate_/i);
+  });
+
+  it("recall reads the hashed tag and the pre-hash identity tag in one round trip", async () => {
+    const spy = stubFetch(() => searchResponse(["fact stored before the hash"]));
     const facts = await recallCandidate("guest-abcdefgh", "background", { candidateName: "Petter" });
-    expect(facts).toEqual(["old fact from the legacy tag"]);
+    expect(facts).toEqual(["fact stored before the hash"]);
     const [search] = calls(spy).searches;
-    expect(search.containerTags).toEqual(["pds_user_guest_abcdefgh", "pds_candidate_petter"]);
+    expect(search.containerTags).toEqual([containerTagFor("guest-abcdefgh"), "pds_user_guest_abcdefgh"]);
+    expect(previousContainerTagFor("")).toBeNull();
   });
 
   it("gives asked questions their own tag, per round type", () => {

@@ -1,4 +1,5 @@
 import type { HistoryEntry } from "@/lib/types";
+import { createHash } from "node:crypto";
 import { looksLikeCandidateQuestion } from "@/lib/llm/parse";
 
 // Long-term candidate memory, backed by Supermemory (supermemory.ai).
@@ -150,10 +151,21 @@ function slug(subject: string): string {
   return subject.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 60);
 }
 
-/** Namespaced so this app's memories never collide with anything else on the
- * same Supermemory account. */
+/** Memory is keyed by IDENTITY — the signed-in user id, or this browser's guest
+ * id — never by the typed name: two candidates called "Rahul" must never read
+ * each other's history. The id is hashed into the tag, so the memory provider
+ * never sees a raw user id, and ids that differ only in case or punctuation can
+ * no longer collapse into one bucket the way a slug let them. */
 export function containerTagFor(subject: string): string {
-  return `pds_user_${slug(subject) || "anon"}`;
+  return `pds_u_${createHash("sha256").update(`pds-memory:${subject.trim()}`).digest("hex").slice(0, 32)}`;
+}
+
+/** The identity tag written before hashing (`pds_user_<slug of the id>`). Still
+ * keyed on the id, never the name, so reading it keeps a returning candidate's
+ * history reachable without letting anyone else's in. Read-only. */
+export function previousContainerTagFor(subject: string): string | null {
+  const s = slug(subject);
+  return s ? `pds_user_${s}` : null;
 }
 
 /** Asked questions live under their OWN tag, per round type. Two reasons: a
@@ -165,18 +177,9 @@ export function askedTagFor(subject: string, roundType: string): string {
   return `${containerTagFor(subject)}__asked_${slug(roundType) || "round"}`;
 }
 
-/** The scheme this app used BEFORE the tag was keyed on identity rather than
- * name — the live account still holds a `pds_candidate_petter` document that
- * `pds_user_*` can no longer reach.
- *
- * Read-only, and deliberately so. Name-keyed tags are exactly the thing the
- * current scheme exists to stop (two candidates called "Rahul" would share a
- * bucket), so nothing is ever WRITTEN here again: this is a one-way migration
- * ramp that empties itself as the legacy documents stop being the only ones a
- * returning candidate has. */
-export function legacyContainerTagFor(candidateName: string | undefined): string | null {
-  const s = slug(candidateName ?? "");
-  return s ? `pds_candidate_${s}` : null;
+function previousAskedTagFor(subject: string, roundType: string): string | null {
+  const prev = previousContainerTagFor(subject);
+  return prev ? `${prev}__asked_${slug(roundType) || "round"}` : null;
 }
 
 // ——— cache ———
@@ -264,9 +267,11 @@ function searchCached(cacheKey: string, tags: string[], q: string, limit: number
 
 // ——— recalling what we know about the candidate ———
 
-function factTags(subject: string, candidateName?: string): string[] {
-  const legacy = legacyContainerTagFor(candidateName);
-  return legacy ? [containerTagFor(subject), legacy] : [containerTagFor(subject)];
+/** Identity tags only. The old name-keyed `pds_candidate_<name>` tag is never
+ * read: it is shared by everyone with the same name. */
+function factTags(subject: string): string[] {
+  const prev = previousContainerTagFor(subject);
+  return prev ? [containerTagFor(subject), prev] : [containerTagFor(subject)];
 }
 
 /** What we already know about this candidate from earlier sessions. Returns an
@@ -278,16 +283,17 @@ export async function recallCandidate(
   opts: { candidateName?: string } = {},
 ): Promise<string[]> {
   if (!apiKey() || !subject.trim()) return [];
-  const tags = factTags(subject, opts.candidateName);
+  void opts.candidateName;
+  const tags = factTags(subject);
   return searchCached(`facts:${tags.join("+")}`, tags, query, MAX_RECALLED_FACTS, "fact(s)");
 }
 
 /** The cached answer, or null when nothing has been fetched yet. Null means
  * "ask again later", never "there is nothing" — the caller runs this turn
  * without memory rather than waiting for the network. */
-export function peekRecalledFacts(subject: string, candidateName?: string): string[] | null {
+export function peekRecalledFacts(subject: string, _candidateName?: string): string[] | null {
   if (!apiKey() || !subject.trim()) return [];
-  return cacheGet(`facts:${factTags(subject, candidateName).join("+")}`);
+  return cacheGet(`facts:${factTags(subject).join("+")}`);
 }
 
 // ——— recalling what we have already ASKED ———
@@ -306,7 +312,8 @@ const ASKED_QUERY = "interview question asked in an earlier session";
 export async function recallAskedQuestions(subject: string, roundType: string): Promise<string[]> {
   if (!apiKey() || !subject.trim()) return localAsked(subject, roundType);
   const tag = askedTagFor(subject, roundType);
-  const remote = await searchCached(`asked:${tag}`, [tag], ASKED_QUERY, MAX_RECALLED_QUESTIONS, "asked question(s)");
+  const prev = previousAskedTagFor(subject, roundType);
+  const remote = await searchCached(`asked:${tag}`, prev ? [tag, prev] : [tag], ASKED_QUERY, MAX_RECALLED_QUESTIONS, "asked question(s)");
   return mergeAsked(remote.map(questionFromDoc), localAsked(subject, roundType));
 }
 
