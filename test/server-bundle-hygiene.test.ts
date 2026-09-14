@@ -37,9 +37,11 @@ const hasBuild = existsSync(SERVER_DIR);
 
 describe.skipIf(!hasBuild)("server bundle hygiene — the browser ML stack stays out of the server", () => {
   const files = hasBuild ? walk(SERVER_DIR) : [];
+  // Only `next build` writes file traces; a `next dev` output dir has the
+  // server chunks (checked below) but no .nft.json to inspect.
+  const traces = files.filter((f) => f.endsWith(".nft.json"));
 
-  it("no page or route function traces a browser-only ML package", () => {
-    const traces = files.filter((f) => f.endsWith(".nft.json"));
+  it.skipIf(traces.length === 0)("no page or route function traces a browser-only ML package", () => {
     expect(traces.length).toBeGreaterThan(0);
     const offenders: string[] = [];
     for (const f of traces) {
