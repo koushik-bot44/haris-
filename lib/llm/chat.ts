@@ -333,7 +333,22 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/** Development-only chaos: LLM_CHAOS_429=0.5 makes half of all chat calls fail
+ * as a rate limit before any network request, so the fallback chain (same
+ * model → fallback model → deterministic interviewer) can be exercised in a
+ * real browser session without draining the real quota. Never in production. */
+function chaos429(): boolean {
+  if (process.env.NODE_ENV === "production") return false;
+  const p = Number(process.env.LLM_CHAOS_429);
+  return Number.isFinite(p) && p > 0 && Math.random() < p;
+}
+
 async function request(cfg: ChatConfig, messages: ChatMessage[], model: string, opts: ChatOptions): Promise<string> {
+  if (chaos429()) {
+    const e = new ProviderError(`${cfg.backend}_429: simulated rate limit (LLM_CHAOS_429)`, "rate_limited");
+    (e as ProviderError & { status?: number; retryAfterMs?: number }).status = 429;
+    throw e;
+  }
   const signal = timeoutSignal(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, opts.signal);
   const stream = Boolean(opts.onDelta);
   let res: Response;
