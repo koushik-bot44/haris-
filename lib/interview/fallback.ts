@@ -266,10 +266,16 @@ export function fallbackText(ctx: FallbackContext): string {
           return `${lead} ${fresh ? `Staying with that — ${fresh}` : freshProbe(s, comp, next, answers)}`.trim();
         }
         case "switch_competency": {
-          const transition = ["Let's switch gears.", "Let me move us on.", "Okay, different topic.", "Let's change tack."][hash(`${s.sid}|sw|${s.turn}`) % 4];
-          return comp
-            ? `${react(s, d.last, engine)} ${transition} ${freshProbe(s, comp, s.ledger[comp]?.difficulty ?? s.plan.startingDifficulty, answers)}`.trim()
-            : handOver(s);
+          if (!comp) return handOver(s);
+          const reacted = react(s, d.last, engine);
+          // A reaction that already ends on "okay" must not be followed by a
+          // transition that opens with it (browser run: "Hmm, okay. Okay,
+          // different topic.").
+          const transitions = ["Let's switch gears.", "Let me move us on.", "Okay, different topic.", "Let's change tack."].filter(
+            (t) => !(/okay[.!]?$/i.test(reacted) && /^okay/i.test(t)),
+          );
+          const transition = transitions[hash(`${s.sid}|sw|${s.turn}`) % transitions.length];
+          return `${reacted} ${transition} ${freshProbe(s, comp, s.ledger[comp]?.difficulty ?? s.plan.startingDifficulty, answers)}`.trim();
         }
         case "test_contradiction":
           return testContradiction(s, m, answers, engine);
