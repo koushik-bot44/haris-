@@ -729,10 +729,21 @@ export function useInterviewMachine(
     void resolveVoiceEngine().then(() => {
       voiceResolvedRef.current = true; // the preroll's Start may now judge readiness
       if (endedRef.current) return;
-      void prepareAcks(voiceForRound(roundType));
+      const acks = () => {
+        if (!endedRef.current) void prepareAcks(voiceForRound(roundType));
+      };
       // No opening pre-fetch when resuming: the round continues from its history.
       if (SPECULATE && !openingRef.current && !resumeRef.current) {
-        openingRef.current = prefetchTurn([], 0);
+        const opening = prefetchTurn([], 0);
+        openingRef.current = opening;
+        // The local studio server renders ONE line at a time, so the acks are
+        // queued BEHIND the opening line, never in front of it: a browser run
+        // had the greeting wait 55 s behind five ack renders, the live draw
+        // time out behind that, and the session drop to the on-device voice.
+        // Acks are first needed after the candidate's first answer anyway.
+        void opening.turnPromise.then(() => opening.prepared?.ready ?? Promise.resolve()).finally(acks);
+      } else {
+        acks();
       }
     });
     setPhase("preroll");

@@ -15,6 +15,10 @@ const env = vi.hoisted(() => ({ engine: "chatterbox" as string }));
 vi.mock("@/lib/tts", () => ({
   getVoiceEngine: () => env.engine,
   isServerVoiceEngine: (e: string) => e === "cloud" || e === "chatterbox" || e === "elevenlabs",
+  // The real one routes to /api/tts or the candidate's own Chatterbox server;
+  // here it is the plain /api/tts request the assertions below inspect.
+  fetchServerVoice: (engine: string, text: string, voice: string | undefined, stream: boolean) =>
+    fetch("/api/tts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, engine, ...(voice ? { voice } : {}), stream }) }),
 }));
 
 import { ACK_TEXTS, playAck, prepareAcks, resetAcks } from "@/lib/ack";

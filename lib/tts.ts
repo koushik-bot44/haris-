@@ -42,7 +42,7 @@ const ENGINE_PICK_KEY = "pds_voice_engine_pick";
  * (its buffered render took 21 s on a loaded laptop). There the wait is as
  * long as a render can reasonably take. */
 const PREPARE_WAIT_MS = 2500;
-const PREPARE_WAIT_LOCAL_MS = 25_000;
+const PREPARE_WAIT_LOCAL_MS = 60_000; // the route's own budget settles `ready` well before this
 
 /** Only a persona key or a well-formed wav name reaches the server — a junk
  * localStorage value must not turn every request into a 400 (= silence). */
@@ -177,7 +177,13 @@ async function probeLocalChatterbox(): Promise<boolean> {
 
 /** The synthesis request for a server engine: /api/tts, or the candidate's
  * own Chatterbox server when that is where the studio voice lives — with the
- * SAME body the route would send, so one speaker renders alike on both paths. */
+ * SAME body the route would send, so one speaker renders alike on both paths.
+ * Every server-voice fetch in the app goes through here (acks included), or
+ * the direct path would silently miss it. */
+export function fetchServerVoice(engine: "cloud" | "chatterbox", text: string, voice: string | undefined, stream: boolean, signal?: AbortSignal): Promise<Response> {
+  return ttsFetch(engine, text, voice, stream, signal ?? new AbortController().signal);
+}
+
 function ttsFetch(engine: "cloud" | "chatterbox", text: string, voice: string | undefined, stream: boolean, signal: AbortSignal): Promise<Response> {
   if (engine === "chatterbox" && chatterboxDirect) {
     const key = voiceKeyOf(voice);

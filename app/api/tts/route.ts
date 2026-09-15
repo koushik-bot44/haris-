@@ -175,7 +175,9 @@ async function speakChatterbox(text: string, voice: string | undefined, stream: 
   const ctl = new AbortController();
   if (signal.aborted) ctl.abort(signal.reason);
   else signal.addEventListener("abort", () => ctl.abort(signal.reason), { once: true });
-  const headersTimer = setTimeout(() => ctl.abort(new DOMException("chatterbox did not start answering", "TimeoutError")), stream ? 20_000 : 45_000);
+  // 45 s either way: the server is single-threaded and a request may sit
+  // behind another render for a while before its own starts.
+  const headersTimer = setTimeout(() => ctl.abort(new DOMException("chatterbox did not start answering", "TimeoutError")), 45_000);
   // Native /tts for both draws. Streamed, it answers a chunked WAV (0xFFFFFFFF
   // sizes) flushed as each text chunk finishes; non-streamed, the SAME endpoint
   // answers a finite WAV. (The OpenAI-compatible /v1/audio/speech used to carry

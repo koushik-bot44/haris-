@@ -29,7 +29,7 @@
 // exactly what the header above already says the ack does not need, because the
 // orb is in its thinking state for the whole latency mask.
 
-import { getVoiceEngine, isServerVoiceEngine } from "@/lib/tts";
+import { fetchServerVoice, getVoiceEngine, isServerVoiceEngine } from "@/lib/tts";
 
 export type AckKind = "ack" | "encourage" | "rephrase";
 
@@ -94,13 +94,9 @@ export async function prepareAcks(voice?: string): Promise<void> {
       const texts: string[] = [];
       for (const text of ACK_TEXTS[kind]) {
         try {
-          const res = await fetch("/api/tts", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            // Buffered (stream:false) on purpose: acks are fetched once and
-            // replayed from memory, so one finite WAV is exactly what is wanted.
-            body: JSON.stringify({ text, engine: serverEngine, ...(voice ? { voice } : {}), stream: false }),
-          });
+          // Buffered (stream:false) on purpose: acks are fetched once and
+          // replayed from memory, so one finite WAV is exactly what is wanted.
+          const res = await fetchServerVoice(serverEngine, text, voice, false);
           if (gen !== generation) return; // reset while we were away — discard
           if (!res.ok) continue;
           const url = mint(await res.blob());
