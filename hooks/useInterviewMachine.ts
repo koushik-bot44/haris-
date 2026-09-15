@@ -24,7 +24,7 @@ import {
 } from "@/lib/stt";
 import { ensureWhisperLoading } from "@/lib/stt-whisper";
 import { answerTextFor, captureOutcome, fullTranscript, type CaptureOutcome, type SttState } from "@/lib/stt-reducer";
-import { getVoiceEngine, prepareSpeak, resolveVoiceEngine, speak, unlockAudio, type PreparedSpeech, type SpeakHandle, type VoiceEngine } from "@/lib/tts";
+import { ensureKokoroLoading, getVoiceEngine, prepareSpeak, resolveVoiceEngine, speak, unlockAudio, type PreparedSpeech, type SpeakHandle, type VoiceEngine } from "@/lib/tts";
 import { kokoroProgress, kokoroStatus } from "@/lib/tts-kokoro";
 
 /** See `voiceWarmup` in the hook. */
@@ -730,7 +730,11 @@ export function useInterviewMachine(
       voiceResolvedRef.current = true; // the preroll's Start may now judge readiness
       if (endedRef.current) return;
       const acks = () => {
-        if (!endedRef.current) void prepareAcks(voiceForRound(roundType));
+        if (endedRef.current) return;
+        void prepareAcks(voiceForRound(roundType));
+        // The on-device fallback warms only now behind the local studio server
+        // (see resolveVoiceEngine): its GPU compile must not race the render.
+        ensureKokoroLoading();
       };
       // No opening pre-fetch when resuming: the round continues from its history.
       if (SPECULATE && !openingRef.current && !resumeRef.current) {

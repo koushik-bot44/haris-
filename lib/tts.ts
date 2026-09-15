@@ -275,8 +275,13 @@ export async function resolveVoiceEngine(): Promise<VoiceEngine> {
     setVoiceEngine(engine);
     // Warm the on-device model even when it is not the chosen engine: it is the
     // ONE fallback the whole session degrades to, and it must already be ready
-    // if that ever happens, or the rescue itself changes voice.
-    ensureKokoroLoading();
+    // if that ever happens, or the rescue itself changes voice. EXCEPT behind
+    // the local studio server: that server renders on this same machine's GPU,
+    // and a browser run measured its opening-line render at 44–85 s while the
+    // on-device model was compiling beside it (1–5 s otherwise) — long enough
+    // to time out and hand the session to the very fallback being warmed. The
+    // room warms it once the opening line is ready (useInterviewMachine).
+    if (engine !== "chatterbox") ensureKokoroLoading();
     return engine;
   } catch {
     const e = getVoiceEngine();
