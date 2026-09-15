@@ -33,8 +33,16 @@ import {
 const ENGINE_KEY = "pds_voice_engine";
 /** An EXPLICIT user pick, kept apart from the auto-resolved cache above. */
 const ENGINE_PICK_KEY = "pds_voice_engine_pick";
-/** How long play() waits for an in-flight preparation before going live. */
+/** How long play() waits for an in-flight preparation before going live.
+ * Cloud engines synthesize in parallel, so a stalled preparation is best
+ * abandoned quickly. The local Chatterbox server renders ONE request at a
+ * time: going live would queue a second synthesis of the same line behind
+ * the first, time out behind it, and latch the whole session onto the
+ * on-device voice — a browser run saw exactly that on the opening line
+ * (its buffered render took 21 s on a loaded laptop). There the wait is as
+ * long as a render can reasonably take. */
 const PREPARE_WAIT_MS = 2500;
+const PREPARE_WAIT_LOCAL_MS = 25_000;
 
 /** Only a persona key or a well-formed wav name reaches the server — a junk
  * localStorage value must not turn every request into a 400 (= silence). */
@@ -906,7 +914,7 @@ export function prepareSpeak(text: string, opts?: SpeakOptions): PreparedSpeech 
       let resolveEngine!: (e: VoiceEngine) => void;
       const engineUsed = new Promise<VoiceEngine>((r) => (resolveEngine = r));
       const done = (async () => {
-        await Promise.race([ready, new Promise((r) => setTimeout(r, PREPARE_WAIT_MS))]);
+        await Promise.race([ready, new Promise((r) => setTimeout(r, serverEngine === "chatterbox" ? PREPARE_WAIT_LOCAL_MS : PREPARE_WAIT_MS))]);
         if (cancelledPlay) {
           resolveFirst(Date.now());
           resolveEngine(engine);

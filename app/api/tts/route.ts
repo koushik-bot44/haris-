@@ -165,7 +165,17 @@ async function speakChatterbox(text: string, voice: string | undefined, stream: 
   // configuration that could never take effect: pointing it at a cloned voice
   // silently kept Emily.wav.
   const voiceFile = chatterboxVoiceFile(voice, process.env.CHATTERBOX_VOICE);
-  const timeout = AbortSignal.any([signal, AbortSignal.timeout(stream ? 20_000 : 30_000)]);
+  // The budget covers the wait for the server to START answering — the first
+  // rendered chunk when streaming, the whole file when not. The body is NOT
+  // under this timer: a streamed line is read as it renders (a 14 s greeting
+  // took 21 s to render on a loaded laptop), and a fixed cut on the stream
+  // truncated the line mid-sentence and reported a 502 that latched the
+  // session onto the on-device voice. The client's own disconnect (`signal`)
+  // still stops everything, and maxDuration bounds the whole request.
+  const ctl = new AbortController();
+  if (signal.aborted) ctl.abort(signal.reason);
+  else signal.addEventListener("abort", () => ctl.abort(signal.reason), { once: true });
+  const headersTimer = setTimeout(() => ctl.abort(new DOMException("chatterbox did not start answering", "TimeoutError")), stream ? 20_000 : 45_000);
   // Native /tts for both draws. Streamed, it answers a chunked WAV (0xFFFFFFFF
   // sizes) flushed as each text chunk finishes; non-streamed, the SAME endpoint
   // answers a finite WAV. (The OpenAI-compatible /v1/audio/speech used to carry
@@ -175,12 +185,17 @@ async function speakChatterbox(text: string, voice: string | undefined, stream: 
   // size IS the time-to-first-audio: Chatterbox renders a whole chunk in one
   // forward pass, 50 is the documented minimum, and the 20 ms crossfade makes
   // small chunks free.
-  const res = await fetch(`${base}/tts`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(chatterboxRequestBody(text, voiceFile, stream, chatterboxTuning(key), envNum("CHATTERBOX_CHUNK_SIZE", CHATTERBOX_DEFAULT_CHUNK))),
-    signal: timeout,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${base}/tts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(chatterboxRequestBody(text, voiceFile, stream, chatterboxTuning(key), envNum("CHATTERBOX_CHUNK_SIZE", CHATTERBOX_DEFAULT_CHUNK))),
+      signal: ctl.signal,
+    });
+  } finally {
+    clearTimeout(headersTimer);
+  }
   // `!res.body` matters as much as `!res.ok`: a 200 with an empty body would
   // otherwise be forwarded as a 0-byte audio/wav, and the buffered path is what
   // callers use to pre-fetch and decode a whole utterance — decodeAudioData
